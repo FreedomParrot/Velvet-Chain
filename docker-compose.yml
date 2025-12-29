@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # Mining Node 1
+  velvet-miner-1:
+    build: .
+    container_name: velvet-miner-1
+    ports:
+      - "8545:8545"
+    command: 
+      - "--port"
+      - "8545"
+      - "--mine"
+      - "--wallet"
+      - "${WALLET_ADDRESS_1:-0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1}"
+    environment:
+      - VELVET_NODE_NAME=miner-1
+    volumes:
+      - miner1-data:/data
+    restart: unless-stopped
+    networks:
+      - velvet-network
+
+  # Mining Node 2 (Optional)
+  velvet-miner-2:
+    build: .
+    container_name: velvet-miner-2
+    ports:
+      - "8546:8545"
+    command: 
+      - "--port"
+      - "8545"
+      - "--mine"
+      - "--wallet"
+      - "${WALLET_ADDRESS_2:-0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb2}"
+    environment:
+      - VELVET_NODE_NAME=miner-2
+    volumes:
+      - miner2-data:/data
+    restart: unless-stopped
+    networks:
+      - velvet-network
+    depends_on:
+      - velvet-miner-1
+
+  # Full Node (No Mining)
+  velvet-fullnode:
+    build: .
+    container_name: velvet-fullnode
+    ports:
+      - "8547:8545"
+    command: 
+      - "--port"
+      - "8545"
+    environment:
+      - VELVET_NODE_NAME=fullnode
+    volumes:
+      - fullnode-data:/data
+    restart: unless-stopped
+    networks:
+      - velvet-network
+    depends_on:
+      - velvet-miner-1
+
+  # Block Explorer (Optional)
+  velvet-explorer:
+    build: .
+    container_name: velvet-explorer
+    ports:
+      - "3000:8545"
+    command:
+      - "--port"
+      - "8545"
+    environment:
+      - VELVET_NODE_NAME=explorer
+      - VELVET_EXPLORER_MODE=true
+    volumes:
+      - ./explorer:/app/explorer
+    restart: unless-stopped
+    networks:
+      - velvet-network
+    depends_on:
+      - velvet-miner-1
+
+volumes:
+  miner1-data:
+  miner2-data:
+  fullnode-data:
+
+networks:
+  velvet-network:
+    driver: bridge
+
+# Usage:
+# 
+# 1. Set your wallet addresses:
+#    export WALLET_ADDRESS_1=0xYourAddress1
+#    export WALLET_ADDRESS_2=0xYourAddress2
+#
+# 2. Start all nodes:
+#    docker-compose up -d
+#
+# 3. Start specific nodes:
+#    docker-compose up -d velvet-miner-1
+#
+# 4. View logs:
+#    docker-compose logs -f velvet-miner-1
+#
+# 5. Stop all nodes:
+#    docker-compose down
+#
+# 6. Stop and remove data:
+#    docker-compose down -v
