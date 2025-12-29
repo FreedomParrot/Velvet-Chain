@@ -31,7 +31,7 @@
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/velvet-chain.git
+git clone https://github.com/freedomparrot/velvet-chain.git
 cd velvet-chain
 ```
 
