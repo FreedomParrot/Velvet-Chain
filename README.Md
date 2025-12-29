@@ -93,7 +93,7 @@ http://localhost:8545/explorer
 | Field | Value |
 |-------|-------|
 | Network Name | Velvet Chain |
-| RPC URL | http://localhost:8545 |
+| RPC URL | http://173.255.229.107:8545 |
 | Chain ID | 16523431 |
 | Currency Symbol | VELVET |
 
