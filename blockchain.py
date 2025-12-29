@@ -39,7 +39,7 @@ NETWORK_MAGIC = b"VELVET"
 VERSION = "1.0.1"
 
 # Genesis Configuration
-GENESIS_ADDRESS = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1"
+GENESIS_ADDRESS = "0xd7e0aa3f99cc4addfd6797897df438a146a9e328"  # OWNER WALLET - DO NOT CHANGE
 INITIAL_SUPPLY = 1000000 * 10**18  # 1 million VELVET
 GENESIS_TIMESTAMP = 1735488000
 
@@ -210,7 +210,7 @@ class Block:
 
 class VelvetChain:
     """Decentralized Blockchain Core"""
-    def __init__(self, miner_address=None):
+    def __init__(self, miner_address=None, is_bootstrap=False):
         self.chain = []
         self.pending_transactions = []
         self.balances = {}
@@ -221,9 +221,13 @@ class VelvetChain:
         self.total_difficulty = 0
         self.mining_thread = None
         self.chain_lock = threading.Lock()
+        self.is_bootstrap = is_bootstrap
+        self.synced = False
         
-        if len(self.chain) == 0:
+        # Only bootstrap node creates genesis
+        if self.is_bootstrap and len(self.chain) == 0:
             self._create_genesis()
+            self.synced = True
     
     def _create_genesis(self):
         """Create genesis block"""
@@ -264,9 +268,12 @@ class VelvetChain:
             return None
         
         print(f"[DEBUG] Starting to mine block...")
+        sys.stdout.flush()
         
         with self.chain_lock:
-            latest = self.get_latest_block()
+            latest = self.chain[-1]  # Direct access, we already have the lock
+            print(f"[DEBUG] Latest block: #{latest.number}")
+            sys.stdout.flush()
             
             coinbase_tx = Transaction(
                 nonce=0,
@@ -277,9 +284,13 @@ class VelvetChain:
                 data='0x',
                 from_addr='0x0000000000000000000000000000000000000000'
             )
+            print(f"[DEBUG] Coinbase tx created")
+            sys.stdout.flush()
             
             block_txs = [coinbase_tx] + self.pending_transactions[:100]
             difficulty = self._calculate_difficulty()
+            print(f"[DEBUG] Difficulty calculated: {difficulty}")
+            sys.stdout.flush()
             
             new_block = Block(
                 number=latest.number + 1,
@@ -289,10 +300,24 @@ class VelvetChain:
                 miner=self.miner_address,
                 difficulty=difficulty
             )
+            print(f"[DEBUG] New block created: #{new_block.number}")
+            sys.stdout.flush()
         
         print(f"⛏️  Mining block #{new_block.number} (difficulty: {difficulty})...")
         sys.stdout.flush()
-        new_block.mine()
+        
+        try:
+            print(f"[DEBUG] About to call new_block.mine()")
+            sys.stdout.flush()
+            new_block.mine()
+            print(f"[DEBUG] Mining completed!")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"[DEBUG] Mining exception: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+            return None
         
         with self.chain_lock:
             # Re-check chain hasn't changed
@@ -342,6 +367,11 @@ class VelvetChain:
     def start_mining(self):
         """Start mining loop"""
         if self.is_mining:
+            return
+        
+        # Non-bootstrap nodes must sync first
+        if not self.is_bootstrap and not self.synced:
+            print("⚠️  Cannot start mining - waiting for blockchain sync...")
             return
         
         self.is_mining = True
@@ -433,6 +463,7 @@ class VelvetChain:
                             self.nonces[sender] = self.nonces.get(sender, 0) + 1
                 
                 print(f"✅ Chain synced successfully")
+                self.synced = True  # Mark as synced
                 return True
                 
         except Exception as e:
@@ -565,6 +596,28 @@ class P2PNetwork:
         """Sync blockchain with peers"""
         time.sleep(5)  # Initial delay
         
+        # Non-bootstrap nodes need initial sync
+        if not self.blockchain.is_bootstrap and not self.blockchain.synced:
+            print("🔄 Performing initial blockchain sync...")
+            for peer in BOOTSTRAP_NODES:
+                try:
+                    response = requests.get(f"{peer}/api/chain", timeout=10)
+                    if response.status_code == 200:
+                        peer_chain = response.json()
+                        if len(peer_chain) > 0:
+                            print(f"📥 Downloading blockchain from {peer}...")
+                            if self.blockchain.replace_chain(peer_chain):
+                                print(f"✅ Initial sync complete!")
+                                break
+                except Exception as e:
+                    print(f"❌ Could not sync from {peer}: {e}")
+            
+            if not self.blockchain.synced and len(self.blockchain.chain) == 0:
+                print("❌ ERROR: Could not sync blockchain from any peer!")
+                print("   The bootstrap node may be offline.")
+                return
+        
+        # Continue with regular sync
         while True:
             try:
                 for peer in list(self.peers):
@@ -832,6 +885,7 @@ def main():
     parser.add_argument('--mine', action='store_true', help='Enable mining')
     parser.add_argument('--wallet', type=str, help='Mining wallet address (required for mining)')
     parser.add_argument('--peer', type=str, help='Connect to specific peer (e.g., http://173.255.229.107:8545)')
+    parser.add_argument('--bootstrap', action='store_true', help='Run as bootstrap node (OWNER ONLY)')
     
     args = parser.parse_args()
     
@@ -852,15 +906,17 @@ def main():
     
     # Initialize blockchain
     print("🔧 Initializing blockchain...")
-    blockchain = VelvetChain(miner_address=args.wallet)
+    blockchain = VelvetChain(miner_address=args.wallet, is_bootstrap=args.bootstrap)
     
     # Initialize P2P network
     print("🔧 Initializing P2P network...")
     p2p_network = P2PNetwork(args.port, blockchain, manual_peer=args.peer)
     p2p_network.start()
     
-    # Wait a moment for initial peer discovery
-    time.sleep(3)
+    # Wait for sync if not bootstrap
+    if not args.bootstrap:
+        print("⏳ Waiting for blockchain sync...")
+        time.sleep(8)  # Give time for initial sync
     
     # Start mining if enabled
     if args.mine:
@@ -873,12 +929,13 @@ def main():
     print(f"RPC Endpoint:     http://localhost:{args.port}")
     print(f"Chain ID:         {CHAIN_ID}")
     print(f"Network:          Velvet Chain")
+    print(f"Node Type:        {'🏛️  BOOTSTRAP (Owner)' if args.bootstrap else '🌐 Regular Node'}")
     print(f"Mining:           {'✅ Active' if args.mine else '❌ Disabled'}")
     if args.wallet:
         print(f"Wallet:           {args.wallet}")
         balance = blockchain.get_balance(args.wallet)
         print(f"Balance:          {balance / 10**18:,.2f} VELVET")
-    print(f"Block Height:     {blockchain.get_latest_block().number}")
+    print(f"Block Height:     {blockchain.get_latest_block().number if blockchain.chain else 0}")
     print(f"Connected Peers:  {len(p2p_network.peers)}")
     if p2p_network.peers:
         print(f"Peers:")
@@ -893,8 +950,9 @@ def main():
     print(f"   Symbol:       VELVET")
     print()
     
-    if not args.peer and args.mine:
-        print("⚠️  Running as bootstrap node on 173.255.229.107")
+    if args.bootstrap:
+        print("🏛️  BOOTSTRAP NODE RUNNING")
+        print("   This node created the genesis block")
         print("   Other nodes can connect with: --peer http://173.255.229.107:8545")
         print()
     
