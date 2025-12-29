@@ -34,6 +34,8 @@ BLOCK_TIME = 10
 MINING_REWARD = 50 * 10**18
 DIFFICULTY_ADJUSTMENT = 100
 TARGET_DIFFICULTY = 5  # Increased from 3 to 5 (much harder)
+HALVING_INTERVAL = 210000  # Halve reward every 210,000 blocks (like Bitcoin)
+MAX_HALVINGS = 64  # After 64 halvings, reward becomes 0
 
 DEFAULT_PORT = 8545
 BOOTSTRAP_NODES = ["http://173.255.229.107:8545"]
@@ -239,6 +241,17 @@ class VelvetChain:
         self.pending_transactions.append(tx)
         return tx.hash
     
+    def get_block_reward(self, block_number):
+        """Calculate block reward with halving"""
+        halvings = block_number // HALVING_INTERVAL
+        
+        if halvings >= MAX_HALVINGS:
+            return 0
+        
+        # Reward halves every HALVING_INTERVAL blocks
+        reward = MINING_REWARD >> halvings  # Bit shift = divide by 2^halvings
+        return reward
+    
     def mine_block(self):
         if not self.miner_address:
             return None
@@ -247,9 +260,16 @@ class VelvetChain:
             latest = self.chain[-1]
             mining_block_num = latest.number + 1
             
+            # Calculate reward with halving
+            block_reward = self.get_block_reward(mining_block_num)
+            
+            if block_reward == 0:
+                print("⚠️  Block reward is 0 - maximum supply reached!")
+                return None
+            
             coinbase_tx = Transaction(
                 nonce=0, gas_price=0, gas_limit=0,
-                to=self.miner_address, value=MINING_REWARD, data='0x',
+                to=self.miner_address, value=block_reward, data='0x',
                 from_addr='0x0000000000000000000000000000000000000000'
             )
             
@@ -289,7 +309,7 @@ class VelvetChain:
                 if tx == coinbase_tx:
                     addr = self.miner_address.lower()
                     old_balance = self.balances.get(addr, 0)
-                    self.balances[addr] = old_balance + MINING_REWARD
+                    self.balances[addr] = old_balance + block_reward
                     print(f"💰 Coinbase: {old_balance / 10**18:,.2f} → {self.balances[addr] / 10**18:,.2f} VELVET")
                 else:
                     sender = tx.from_addr.lower() if tx.from_addr else None
@@ -305,8 +325,9 @@ class VelvetChain:
             self.pending_transactions = self.pending_transactions[100:]
         
         miner_balance = self.get_balance(self.miner_address) / 10**18
+        halvings = new_block.number // HALVING_INTERVAL
         print(f"✅ Block #{new_block.number} added to chain")
-        print(f"💰 Mining reward: {MINING_REWARD / 10**18} VELVET → {self.miner_address}")
+        print(f"💰 Mining reward: {block_reward / 10**18} VELVET (era {halvings}) → {self.miner_address}")
         print(f"💎 Total balance: {miner_balance:,.2f} VELVET\n")
         
         return new_block
