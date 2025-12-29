@@ -233,12 +233,21 @@ class VelvetChain:
         """Create genesis block"""
         genesis = Block(0, GENESIS_TIMESTAMP, [], '0x' + '0' * 64, GENESIS_ADDRESS, difficulty=1)
         genesis.hash = genesis.calculate_hash()
-        self.chain.append(genesis)
         
+        # Verify genesis hash matches (prevents fake genesis)
+        if genesis.hash != GENESIS_HASH:
+            print(f"❌ CRITICAL: Genesis hash mismatch!")
+            print(f"   Expected: {GENESIS_HASH}")
+            print(f"   Got: {genesis.hash}")
+            print(f"   Someone modified the genesis parameters!")
+            sys.exit(1)
+        
+        self.chain.append(genesis)
         self.balances[GENESIS_ADDRESS.lower()] = INITIAL_SUPPLY
         self.nonces[GENESIS_ADDRESS.lower()] = 0
         
         print(f"✅ Genesis block created")
+        print(f"🔐 Genesis hash: {genesis.hash}")
         print(f"💰 Initial supply: {INITIAL_SUPPLY / 10**18:,.0f} VELVET → {GENESIS_ADDRESS}")
     
     def get_latest_block(self):
@@ -434,6 +443,14 @@ class VelvetChain:
             if len(new_blocks) <= len(self.chain):
                 return False
             
+            # CRITICAL: Verify genesis hash matches
+            if new_blocks[0].hash != GENESIS_HASH:
+                print(f"❌ REJECTED: Invalid genesis hash from peer!")
+                print(f"   Expected: {GENESIS_HASH}")
+                print(f"   Got: {new_blocks[0].hash}")
+                print(f"   This peer is on a different/fake blockchain!")
+                return False
+            
             # Basic validation
             for i in range(1, len(new_blocks)):
                 if new_blocks[i].previous_hash != new_blocks[i-1].hash:
@@ -476,11 +493,20 @@ class VelvetChain:
             new_block = Block.from_dict(block_data)
             
             with self.chain_lock:
+                # If we have no chain yet, reject individual blocks
+                if len(self.chain) == 0:
+                    print(f"⚠️  Rejecting block - no genesis. Peer should sync first.")
+                    return False
+                
                 latest = self.chain[-1]
                 
                 # Check if block connects to our chain
                 if new_block.previous_hash != latest.hash:
-                    print(f"⚠️  Block #{new_block.number} doesn't connect to our chain")
+                    # Chain mismatch - they're on a different chain
+                    if new_block.number < latest.number:
+                        print(f"⚠️  Rejecting old block #{new_block.number} (we're at #{latest.number})")
+                    else:
+                        print(f"⚠️  Block #{new_block.number} from different chain. Peer needs to resync.")
                     return False
                 
                 # Verify hash meets difficulty
@@ -599,18 +625,30 @@ class P2PNetwork:
         # Non-bootstrap nodes need initial sync
         if not self.blockchain.is_bootstrap and not self.blockchain.synced:
             print("🔄 Performing initial blockchain sync...")
-            for peer in BOOTSTRAP_NODES:
-                try:
-                    response = requests.get(f"{peer}/api/chain", timeout=10)
-                    if response.status_code == 200:
-                        peer_chain = response.json()
-                        if len(peer_chain) > 0:
-                            print(f"📥 Downloading blockchain from {peer}...")
-                            if self.blockchain.replace_chain(peer_chain):
-                                print(f"✅ Initial sync complete!")
-                                break
-                except Exception as e:
-                    print(f"❌ Could not sync from {peer}: {e}")
+            sync_attempts = 0
+            max_attempts = 5
+            
+            while sync_attempts < max_attempts and not self.blockchain.synced:
+                for peer in BOOTSTRAP_NODES + ([self.manual_peer] if self.manual_peer else []):
+                    try:
+                        response = requests.get(f"{peer}/api/chain", timeout=10)
+                        if response.status_code == 200:
+                            peer_chain = response.json()
+                            if len(peer_chain) > 0:
+                                print(f"📥 Downloading {len(peer_chain)} blocks from {peer}...")
+                                if self.blockchain.replace_chain(peer_chain):
+                                    print(f"✅ Initial sync complete! Chain height: {len(peer_chain)}")
+                                    # Wait a bit more to ensure stability
+                                    time.sleep(3)
+                                    break
+                    except Exception as e:
+                        print(f"❌ Could not sync from {peer}: {e}")
+                
+                if not self.blockchain.synced:
+                    sync_attempts += 1
+                    if sync_attempts < max_attempts:
+                        print(f"⏳ Sync attempt {sync_attempts}/{max_attempts}, retrying in 5s...")
+                        time.sleep(5)
             
             if not self.blockchain.synced and len(self.blockchain.chain) == 0:
                 print("❌ ERROR: Could not sync blockchain from any peer!")
@@ -626,7 +664,7 @@ class P2PNetwork:
                         if response.status_code == 200:
                             peer_chain = response.json()
                             if len(peer_chain) > len(self.blockchain.chain):
-                                print(f"🔄 Found longer chain at {peer}")
+                                print(f"🔄 Found longer chain at {peer} ({len(peer_chain)} blocks)")
                                 self.blockchain.replace_chain(peer_chain)
                                 break
                     except Exception as e:
@@ -916,11 +954,24 @@ def main():
     # Wait for sync if not bootstrap
     if not args.bootstrap:
         print("⏳ Waiting for blockchain sync...")
-        time.sleep(8)  # Give time for initial sync
+        wait_time = 0
+        max_wait = 30
+        while not blockchain.synced and wait_time < max_wait:
+            time.sleep(1)
+            wait_time += 1
+        
+        if blockchain.synced:
+            print(f"✅ Sync complete! Chain height: {len(blockchain.chain)}")
+        else:
+            print("⚠️  Sync incomplete - may need more time")
     
     # Start mining if enabled
     if args.mine:
-        blockchain.start_mining()
+        if blockchain.synced or args.bootstrap:
+            blockchain.start_mining()
+        else:
+            print("❌ Cannot start mining - blockchain not synced yet")
+            print("   Restart node after sync completes")
     
     # Print node information
     print(f"\n{'='*60}")
