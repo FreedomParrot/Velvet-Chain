@@ -14,6 +14,7 @@ import hashlib
 import json
 import time
 import threading
+import random
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
@@ -339,9 +340,10 @@ class VelvetChain:
             
             while self.is_mining:
                 try:
-                    # Wait a bit to allow peer blocks to arrive before starting mining
-                    print("⏳ Checking for peer blocks...")
-                    time.sleep(3)  # Give network time to propagate
+                    # Random delay to give all miners a fair chance (0-5 seconds)
+                    delay = random.uniform(0, 5)
+                    print(f"⏳ Waiting {delay:.1f}s for network...")
+                    time.sleep(delay)
                     
                     block = self.mine_block()
                     if block and p2p_network:
