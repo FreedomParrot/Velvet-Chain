@@ -288,7 +288,9 @@ class VelvetChain:
             for tx in block_txs:
                 if tx == coinbase_tx:
                     addr = self.miner_address.lower()
-                    self.balances[addr] = self.balances.get(addr, 0) + MINING_REWARD
+                    old_balance = self.balances.get(addr, 0)
+                    self.balances[addr] = old_balance + MINING_REWARD
+                    print(f"💰 Coinbase: {old_balance / 10**18:,.2f} → {self.balances[addr] / 10**18:,.2f} VELVET")
                 else:
                     sender = tx.from_addr.lower() if tx.from_addr else None
                     recipient = tx.to.lower() if tx.to else None
@@ -302,8 +304,10 @@ class VelvetChain:
             self.total_difficulty += 2 ** difficulty
             self.pending_transactions = self.pending_transactions[100:]
         
+        miner_balance = self.get_balance(self.miner_address) / 10**18
         print(f"✅ Block #{new_block.number} added to chain")
-        print(f"💰 Mining reward: {MINING_REWARD / 10**18} VELVET → {self.miner_address}\n")
+        print(f"💰 Mining reward: {MINING_REWARD / 10**18} VELVET → {self.miner_address}")
+        print(f"💎 Total balance: {miner_balance:,.2f} VELVET\n")
         
         return new_block
     
