@@ -39,7 +39,7 @@ BOOTSTRAP_NODES = ["http://173.255.229.107:8545"]
 
 MAX_PEERS = 25
 PEER_DISCOVERY_INTERVAL = 30
-SYNC_INTERVAL = 30  # Check more frequently
+SYNC_INTERVAL = 15  # Check every 15 seconds instead of 30
 PEER_ANNOUNCE_INTERVAL = 45
 
 # ==================== BLOCKCHAIN CORE ====================
@@ -339,12 +339,16 @@ class VelvetChain:
             
             while self.is_mining:
                 try:
+                    # Wait a bit to allow peer blocks to arrive before starting mining
+                    print("⏳ Checking for peer blocks...")
+                    time.sleep(3)  # Give network time to propagate
+                    
                     block = self.mine_block()
                     if block and p2p_network:
                         p2p_network.broadcast_block(block)
                     
-                    # Wait a bit before starting next block to allow network blocks to arrive
-                    time.sleep(2)
+                    # Small delay after broadcasting
+                    time.sleep(1)
                     
                 except Exception as e:
                     print(f"❌ Mining error: {e}")
@@ -434,6 +438,8 @@ class VelvetChain:
                 
                 latest = self.chain[-1]
                 
+                print(f"📨 Peer block #{new_block.number} | Our height: #{latest.number}")
+                
                 # EXACT MATCH - next block
                 if new_block.previous_hash == latest.hash and new_block.number == latest.number + 1:
                     target = '0' * new_block.difficulty
@@ -455,29 +461,43 @@ class VelvetChain:
                             self.nonces[sender] = self.nonces.get(sender, 0) + 1
                     
                     self.chain.append(new_block)
-                    print(f"✅ Block #{new_block.number} from peer")
+                    print(f"   ✅ Accepted from peer")
                     return True
                 
-                # OLD BLOCK - Check if we're on different chains
+                # Same block number as our latest - FORK!
+                elif new_block.number == latest.number:
+                    if new_block.hash != latest.hash:
+                        print(f"   🔀 FORK! Different block #{new_block.number}")
+                        print(f"      Our hash: {latest.hash[:16]}...")
+                        print(f"      Peer hash: {new_block.hash[:16]}...")
+                        return "FORK_DETECTED"
+                    else:
+                        print(f"   ⏭️  Duplicate block (same hash)")
+                        return False
+                
+                # OLD BLOCK - Check if we have different history
                 elif new_block.number < latest.number:
-                    # Check if this block exists in our chain at that position
                     if new_block.number < len(self.chain):
                         our_block = self.chain[new_block.number]
                         if our_block.hash != new_block.hash:
-                            # DIFFERENT BLOCK AT SAME HEIGHT = FORK!
-                            print(f"🔀 FORK at #{new_block.number}! Checking peer chains...")
+                            print(f"   🔀 FORK at block #{new_block.number}!")
+                            print(f"      Our hash: {our_block.hash[:16]}...")
+                            print(f"      Peer hash: {new_block.hash[:16]}...")
                             return "FORK_DETECTED"
+                    print(f"   ⏭️  Old block rejected")
                     return False
                 
                 # FUTURE BLOCK - we're behind
                 elif new_block.number > latest.number + 1:
-                    print(f"⚠️  Peer ahead by {new_block.number - latest.number} blocks. Syncing...")
+                    print(f"   ⚠️  Gap! Peer is {new_block.number - latest.number} blocks ahead")
                     return "NEED_SYNC"
                 
                 return False
                 
         except Exception as e:
-            print(f"❌ Block error: {e}")
+            print(f"❌ Block validation error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def get_block_by_number(self, number):
@@ -600,12 +620,29 @@ class P2PNetwork:
                         if response.status_code == 200:
                             peer_chain = response.json()
                             
+                            our_height = len(self.blockchain.chain)
+                            peer_height = len(peer_chain)
+                            
                             # If peer has longer chain, sync it
-                            if len(peer_chain) > len(self.blockchain.chain):
-                                print(f"🔄 Peer has longer chain ({len(peer_chain)} vs {len(self.blockchain.chain)})")
-                                self.blockchain.replace_chain(peer_chain)
-                                break
-                    except:
+                            if peer_height > our_height:
+                                print(f"\n🔄 Peer has longer chain ({peer_height} vs {our_height})")
+                                if self.blockchain.replace_chain(peer_chain):
+                                    print(f"✅ Synced to peer's chain!")
+                                    break
+                            # If same height but we detect fork, compare
+                            elif peer_height == our_height and our_height > 1:
+                                # Check if last block matches
+                                peer_last = peer_chain[-1]
+                                our_last = self.blockchain.chain[-1].to_dict()
+                                
+                                if peer_last['hash'] != our_last['hash']:
+                                    print(f"\n🔀 FORK DETECTED! Same height ({our_height}) but different blocks")
+                                    print(f"   Comparing chains...")
+                                    # For now, accept the peer's chain (in real blockchain, would use difficulty)
+                                    if self.blockchain.replace_chain(peer_chain):
+                                        print(f"✅ Resolved fork - using peer's chain")
+                                        break
+                    except Exception as e:
                         # Remove dead peers
                         self.peers.discard(peer)
             except:
