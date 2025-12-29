@@ -146,7 +146,7 @@ Velvet Chain uses **Proof of Work** consensus:
 - **Network Name:** Velvet Chain
 - **Chain ID:** 16523431
 - **Currency:** VELVET
-- **Total Supply:** 1,000,000 VELVET (initial) + mining rewards
+- **Total Supply:** 1,000,000 VELVET (initial) + mining rewards capped at 21,000,000 with halving every new era !
 - **Block Explorer:** https://explorer.velvetchain.network
 - **Genesis Block:** December 29, 2024
 
