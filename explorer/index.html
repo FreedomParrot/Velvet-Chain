@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velvet Chain Explorer - Decentralized Mining Network</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔗</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .logo {
+            font-size: 48px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #ffd89b, #19547b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .tagline {
+            font-size: 18px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #f6851b, #e2761b);
+            border: none;
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 5px 20px rgba(246, 133, 27, 0.4);
+        }
+
+        .network-info {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 14px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .network-info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .network-info-label {
+            opacity: 0.7;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .network-info-value {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .stat-icon {
+            font-size: 40px;
+            margin-bottom: 10px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .stat-subtext {
+            font-size: 12px;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .search-bar {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 15px 20px;
+            border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .search-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #ffd89b;
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .blocks-section {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .block-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .block-card:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateX(5px);
+        }
+
+        .block-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .block-number {
+            font-size: 20px;
+            font-weight: bold;
+            color: #ffd89b;
+        }
+
+        .block-time {
+            font-size: 14px;
+            opacity: 0.7;
+        }
+
+        .tx-count {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .block-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            font-size: 14px;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .info-label {
+            opacity: 0.7;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .info-value {
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        .hash {
+            color: #ffd89b;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            opacity: 0.7;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 18px;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .mining-info {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 30px;
+        }
+
+        .mining-steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .step-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .step-number {
+            background: #ffd89b;
+            color: #667eea;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .step-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .step-description {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        .code-block {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            opacity: 0.8;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .logo {
+                font-size: 32px;
+            }
+
+            .stat-value {
+                font-size: 24px;
+            }
+
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div>
+                    <div class="logo">🔗 Velvet Chain</div>
+                    <div class="tagline">Decentralized EVM-Compatible Blockchain</div>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" onclick="addToMetaMask()">
+                        🦊 Add to MetaMask
+                    </button>
+                    <a href="https://github.com/yourusername/velvet-chain" class="btn" target="_blank">
+                        💻 GitHub
+                    </a>
+                    <a href="#mining" class="btn">
+                        ⛏️ Start Mining
+                    </a>
+                </div>
+            </div>
+            <div class="network-info">
+                <div class="network-info-item">
+                    <div class="network-info-label">Network</div>
+                    <div class="network-info-value">Velvet Chain</div>
+                </div>
+                <div class="network-info-item">
+                    <div class="network-info-label">Chain ID</div>
+                    <div class="network-info-value">16523431</div>
+                </div>
+                <div class="network-info-item">
+                    <div class="network-info-label">RPC URL</div>
+                    <div class="network-info-value" id="rpcUrl">http://localhost:8545</div>
+                </div>
+                <div class="network-info-item">
+                    <div class="network-info-label">Currency</div>
+                    <div class="network-info-value">VELVET</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">📦</div>
+                <div class="stat-label">Block Height</div>
+                <div class="stat-value" id="blockHeight">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⛏️</div>
+                <div class="stat-label">Difficulty</div>
+                <div class="stat-value" id="difficulty">-</div>
+                <div class="stat-subtext" id="totalDifficulty">Total: -</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⏳</div>
+                <div class="stat-label">Pending TXs</div>
+                <div class="stat-value" id="pendingTxs">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">💰</div>
+                <div class="stat-label">Block Reward</div>
+                <div class="stat-value" id="miningReward">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🌐</div>
+                <div class="stat-label">Connected Peers</div>
+                <div class="stat-value" id="peerCount">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🔢</div>
+                <div class="stat-label">Version</div>
+                <div class="stat-value" id="version" style="font-size: 24px;">-</div>
+            </div>
+        </div>
+
+        <div class="search-bar">
+            <input type="text" class="search-input" placeholder="Search by block number, transaction hash, or address..." id="searchInput">
+        </div>
+
+        <div class="blocks-section">
+            <div class="section-title">
+                <span class="status-indicator"></span>
+                Latest Blocks
+            </div>
+            <div id="blocksContainer">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Connecting to Velvet Chain node...
+                </div>
+            </div>
+        </div>
+
+        <div class="mining-info" id="mining">
+            <div class="section-title">
+                ⛏️ Start Mining VELVET
+            </div>
+            <p style="opacity: 0.9; margin-bottom: 20px;">
+                Anyone can join the Velvet Chain network and start mining! Earn 50 VELVET per block you mine.
+            </p>
+            <div class="mining-steps">
+                <div class="step-card">
+                    <div class="step-number">1</div>
+                    <div class="step-title">Clone Repository</div>
+                    <div class="step-description">Download the Velvet Chain node software from GitHub</div>
+                    <div class="code-block">git clone https://github.com/yourusername/velvet-chain.git</div>
+                </div>
+                <div class="step-card">
+                    <div class="step-number">2</div>
+                    <div class="step-title">Install Dependencies</div>
+                    <div class="step-description">Install required Python packages</div>
+                    <div class="code-block">pip install -r requirements.txt</div>
+                </div>
+                <div class="step-card">
+                    <div class="step-number">3</div>
+                    <div class="step-title">Start Mining</div>
+                    <div class="step-description">Run with your wallet address</div>
+                    <div class="code-block">python node.py --mine --wallet 0xYourAddress</div>
+                </div>
+                <div class="step-card">
+                    <div class="step-number">4</div>
+                    <div class="step-title">Earn Rewards</div>
+                    <div class="step-description">Get 50 VELVET for each block you mine!</div>
+                    <div class="code-block">💰 Mining reward: 50 VELVET</div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>🔗 Velvet Chain v1.0.0 - A Decentralized EVM-Compatible Blockchain</p>
+            <p style="margin-top: 10px; opacity: 0.7;">Made with ❤️ by the Velvet Chain Community</p>
+        </footer>
+    </div>
+
+    <script>
+        const RPC_URL = window.location.origin;
+        let blocks = [];
+        let stats = {};
+
+        async function fetchStats() {
+            try {
+                const response = await fetch(`${RPC_URL}/api/stats`);
+                stats = await response.json();
+                
+                document.getElementById('blockHeight').textContent = stats.blockHeight || 0;
+                document.getElementById('difficulty').textContent = stats.difficulty || 0;
+                document.getElementById('totalDifficulty').textContent = `Total: ${stats.totalDifficulty || 0}`;
+                document.getElementById('pendingTxs').textContent = stats.pendingTransactions || 0;
+                document.getElementById('miningReward').textContent = `${stats.miningReward || 0} VELVET`;
+                document.getElementById('peerCount').textContent = stats.peers || 0;
+                document.getElementById('version').textContent = `v${stats.version || '1.0.0'}`;
+            } catch (error) {
+                console.error('Failed to fetch stats:', error);
+            }
+        }
+
+        async function fetchBlocks() {
+            try {
+                const response = await fetch(`${RPC_URL}/api/chain`);
+                blocks = await response.json();
+                renderBlocks();
+            } catch (error) {
+                console.error('Failed to fetch blocks:', error);
+                document.getElementById('blocksContainer').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⚠️</div>
+                        <div>Unable to connect to Velvet Chain node</div>
+                        <div style="margin-top: 10px; font-size: 14px; opacity: 0.7;">
+                            Make sure the node is running at ${RPC_URL}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function renderBlocks() {
+            const container = document.getElementById('blocksContainer');
+            
+            if (blocks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📦</div>
+                        <div>No blocks yet</div>
+                        <div style="margin-top: 10px; font-size: 14px;">
+                            Waiting for the first block to be mined...
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            const sortedBlocks = [...blocks].reverse().slice(0, 20);
+            
+            container.innerHTML = sortedBlocks.map(block => {
+                const blockNum = parseInt(block.number, 16);
+                const timestamp = parseInt(block.timestamp, 16);
+                const date = new Date(timestamp * 1000);
+                const timeAgo = getTimeAgo(date);
+                const txCount = block.transactions.length;
+
+                return `
+                    <div class="block-card" onclick="viewBlock(${blockNum})">
+                        <div class="block-header">
+                            <div>
+                                <span class="block-number">Block #${blockNum}</span>
+                                <span class="tx-count">${txCount} tx${txCount !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div class="block-time">${timeAgo}</div>
+                        </div>
+                        <div class="block-info">
+                            <div class="info-item">
+                                <div class="info-label">Hash</div>
+                                <div class="info-value hash">${block.hash.substring(0, 20)}...</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Miner</div>
+                                <div class="info-value">${block.miner.substring(0, 15)}...</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Gas Used</div>
+                                <div class="info-value">${parseInt(block.gasUsed, 16).toLocaleString()}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Difficulty</div>
+                                <div class="info-value">${parseInt(block.difficulty, 16).toLocaleString()}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getTimeAgo(date) {
+            const seconds = Math.floor((new Date() - date) / 1000);
+            
+            if (seconds < 60) return `${seconds} seconds ago`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+            return `${Math.floor(seconds / 86400)} days ago`;
+        }
+
+        function viewBlock(blockNum) {
+            const block = blocks.find(b => parseInt(b.number, 16) === blockNum);
+            if (block) {
+                const timestamp = parseInt(block.timestamp, 16);
+                const date = new Date(timestamp * 1000);
+                
+                alert(`Block #${blockNum}\n\n` +
+                      `Hash: ${block.hash}\n` +
+                      `Miner: ${block.miner}\n` +
+                      `Transactions: ${block.transactions.length}\n` +
+                      `Gas Used: ${parseInt(block.gasUsed, 16).toLocaleString()}\n` +
+                      `Difficulty: ${parseInt(block.difficulty, 16)}\n` +
+                      `Timestamp: ${date.toLocaleString()}`);
+            }
+        }
+
+        async function addToMetaMask() {
+            if (typeof window.ethereum !== 'undefined') {
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: '0xFC23B7', // 16523431 in hex
+                            chainName: 'Velvet Chain',
+                            nativeCurrency: {
+                                name: 'Velvet',
+                                symbol: 'VELVET',
+                                decimals: 18
+                            },
+                            rpcUrls: [RPC_URL],
+                            blockExplorerUrls: [window.location.origin]
+                        }]
+                    });
+                    alert('🎉 Velvet Chain added to MetaMask!\n\nYou can now send and receive VELVET tokens.');
+                } catch (error) {
+                    console.error('Failed to add network:', error);
+                    alert('Failed to add network to MetaMask. Please add manually:\n\n' +
+                          'Network Name: Velvet Chain\n' +
+                          'RPC URL: ' + RPC_URL + '\n' +
+                          'Chain ID: 16523431\n' +
+                          'Currency Symbol: VELVET');
+                }
+            } else {
+                alert('MetaMask is not installed.\n\n' +
+                      'Please install MetaMask from https://metamask.io to connect your wallet.');
+            }
+        }
+
+        // Initialize
+        fetchStats();
+        fetchBlocks();
+
+        // Auto-refresh every 5 seconds
+        setInterval(() => {
+            fetchStats();
+            fetchBlocks();
+        }, 5000);
+
+        // Search functionality
+        document.getElementById('searchInput').addEventListener('keyup', (e) => {
+            if (e.key === 'Enter') {
+                const query = e.target.value.toLowerCase();
+                
+                // Search by block number
+                const blockByNumber = blocks.find(b => parseInt(b.number, 16).toString() === query);
+                if (blockByNumber) {
+                    viewBlock(parseInt(blockByNumber.number, 16));
+                    return;
+                }
+                
+                // Search by hash
+                const blockByHash = blocks.find(b => b.hash.toLowerCase().includes(query));
+                if (blockByHash) {
+                    viewBlock(parseInt(blockByHash.number, 16));
+                    return;
+                }
+                
+                // Search by miner address
+                const blockByMiner = blocks.find(b => b.miner.toLowerCase().includes(query));
+                if (blockByMiner) {
+                    viewBlock(parseInt(blockByMiner.number, 16));
+                    return;
+                }
+                
+                alert('No results found for: ' + query);
+            }
+        });
+
+        // Update RPC URL display
+        document.getElementById('rpcUrl').textContent = RPC_URL;
+    </script>
+</body>
+</html>
