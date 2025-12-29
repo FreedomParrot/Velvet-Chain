@@ -340,17 +340,17 @@ class VelvetChain:
             
             while self.is_mining:
                 try:
-                    # Random delay to give all miners a fair chance (0-5 seconds)
-                    delay = random.uniform(0, 5)
+                    # Random delay to give all miners a fair chance (0-8 seconds)
+                    delay = random.uniform(0, 8)
                     print(f"⏳ Waiting {delay:.1f}s for network...")
                     time.sleep(delay)
                     
                     block = self.mine_block()
                     if block and p2p_network:
                         p2p_network.broadcast_block(block)
-                    
-                    # Small delay after broadcasting
-                    time.sleep(1)
+                        # Wait longer after broadcasting to let network converge
+                        print("📡 Block broadcast - waiting for network...")
+                        time.sleep(5)
                     
                 except Exception as e:
                     print(f"❌ Mining error: {e}")
@@ -390,15 +390,46 @@ class VelvetChain:
                     print("❌ Invalid chain: broken links")
                     return False
             
+            return self._apply_chain(new_blocks)
+                
+        except Exception as e:
+            print(f"❌ Sync error: {e}")
+            return False
+    
+    def replace_chain_force(self, new_chain_data):
+        """Force replace chain even if same length (for fork resolution)"""
+        try:
+            new_blocks = [Block.from_dict(b) for b in new_chain_data]
+            
+            # Validate genesis
+            if new_blocks[0].hash != GENESIS_HASH:
+                print(f"❌ REJECTED: Invalid genesis!")
+                return False
+            
+            # Validate chain integrity
+            for i in range(1, len(new_blocks)):
+                if new_blocks[i].previous_hash != new_blocks[i-1].hash:
+                    print("❌ Invalid chain: broken links")
+                    return False
+            
+            return self._apply_chain(new_blocks)
+                
+        except Exception as e:
+            print(f"❌ Sync error: {e}")
+            return False
+    
+    def _apply_chain(self, new_blocks):
+        """Helper to apply a new chain"""
+        try:
             # Stop mining before replacing chain
             was_mining = self.is_mining
             if was_mining:
                 print("⏸️  Pausing mining for chain sync...")
                 self.mining_should_stop = True
-                time.sleep(0.5)  # Let current mining iteration finish
+                time.sleep(0.5)
             
             with self.chain_lock:
-                print(f"🔄 Syncing {len(new_blocks)} blocks...")
+                print(f"🔄 Applying chain with {len(new_blocks)} blocks...")
                 
                 self.chain = new_blocks
                 self.balances = {GENESIS_ADDRESS.lower(): INITIAL_SUPPLY}
@@ -420,14 +451,12 @@ class VelvetChain:
                 print(f"✅ Chain synced to height {len(self.chain)-1}!")
                 self.synced = True
             
-            # Resume mining if it was active
             if was_mining:
                 print("▶️  Resuming mining...")
             
             return True
-                
         except Exception as e:
-            print(f"❌ Sync error: {e}")
+            print(f"❌ Apply chain error: {e}")
             return False
     
     def add_block_from_peer(self, block_data):
@@ -679,18 +708,41 @@ class P2PNetwork:
     def force_sync(self):
         """Force an immediate chain sync when fork is detected"""
         print("🔄 Force sync initiated...")
+        time.sleep(1)  # Brief pause to let network settle
+        
         for peer in list(self.peers):
             try:
                 response = requests.get(f"{peer}/api/chain", timeout=10)
                 if response.status_code == 200:
                     peer_chain = response.json()
-                    if len(peer_chain) > len(self.blockchain.chain):
-                        print(f"   Found longer chain ({len(peer_chain)} blocks)")
-                        self.blockchain.replace_chain(peer_chain)
-                        return
-            except:
-                pass
-        print("   No longer chain found")
+                    our_len = len(self.blockchain.chain)
+                    peer_len = len(peer_chain)
+                    
+                    print(f"   Comparing: Our chain={our_len}, Peer chain={peer_len}")
+                    
+                    # If peer has longer chain, take it
+                    if peer_len > our_len:
+                        print(f"   ✅ Peer has longer chain - syncing...")
+                        if self.blockchain.replace_chain(peer_chain):
+                            return
+                    # If same length, compare blocks to detect fork
+                    elif peer_len == our_len and our_len > 0:
+                        peer_last = peer_chain[-1]
+                        our_last = self.blockchain.chain[-1].to_dict()
+                        
+                        print(f"   Our block #{our_len}: {our_last['hash'][:16]}...")
+                        print(f"   Peer block #{peer_len}: {peer_last['hash'][:16]}...")
+                        
+                        if peer_last['hash'] != our_last['hash']:
+                            print(f"   🔀 Different chains detected - using peer's chain")
+                            if self.blockchain.replace_chain_force(peer_chain):
+                                return
+                        else:
+                            print(f"   ✅ Chains are identical (no fork)")
+            except Exception as e:
+                print(f"   ❌ Sync error: {e}")
+        
+        print("   Sync complete")
 
 # ==================== API ====================
 
