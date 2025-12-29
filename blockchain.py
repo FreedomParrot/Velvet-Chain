@@ -20,16 +20,23 @@ import time
 import threading
 import random
 import secrets
+import os
+import sys
+from collections import defaultdict
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
-import sys
-from collections import defaultdict
-import rlp
-from rlp.sedes import big_endian_int, binary, BigEndianInt, Binary
-from eth_keys import keys
-from eth_utils import keccak, to_checksum_address, to_bytes, to_hex
-import sha3
+
+# Try to import RLP and eth libraries
+try:
+    import rlp
+    from rlp.sedes import big_endian_int, binary, BigEndianInt, Binary
+    from eth_keys import keys
+    from eth_utils import keccak, to_checksum_address, to_bytes, to_hex
+    RLP_AVAILABLE = True
+except ImportError:
+    RLP_AVAILABLE = False
+    print("⚠️  eth-rlp/eth-keys not available - using simplified mode")
 
 # Try to import cryptography for proper ECDSA
 try:
@@ -81,453 +88,230 @@ TX_TYPE_TRANSFER = 0
 TX_TYPE_CONTRACT_CREATION = 1
 TX_TYPE_CONTRACT_CALL = 2
 
-# ==================== CRYPTOGRAPHY ====================
-class Transaction(rlp.Serializable):
-    """
-    EIP-155 compliant transaction
-    """
-    fields = [
-        ('nonce', big_endian_int),
-        ('gas_price', big_endian_int),
-        ('gas_limit', big_endian_int),
-        ('to', Binary.fixed_length(20, allow_empty=True)),
-        ('value', big_endian_int),
-        ('data', binary),
-        ('v', big_endian_int),
-        ('r', big_endian_int),
-        ('s', big_endian_int),
-    ]
-    
-    def __init__(self, nonce=0, gas_price=0, gas_limit=0, to=b'', value=0, data=b'', v=0, r=0, s=0):
-        super(Transaction, self).__init__(nonce, gas_price, gas_limit, to, value, data, v, r, s)
-        self._sender = None
-        self._hash = None
-    
-    @property
-    def hash(self):
-        if self._hash is None:
-            self._hash = keccak(rlp.encode(self))
-        return self._hash
-    
-    @property
-    def sender(self):
-        if self._sender is None:
-            self._sender = self.recover_sender()
-        return self._sender
-    
-    def recover_sender(self):
-        """Recover sender address from signature using ecrecover"""
-        if self.v not in (27, 28) and self.v not in range(35, 100000):
-            raise ValueError(f"Invalid v value: {self.v}")
+# ==================== RLP TRANSACTION (if available) ====================
+
+if RLP_AVAILABLE:
+    class RLPTransaction(rlp.Serializable):
+        """
+        EIP-155 compliant transaction
+        """
+        fields = [
+            ('nonce', big_endian_int),
+            ('gas_price', big_endian_int),
+            ('gas_limit', big_endian_int),
+            ('to', Binary.fixed_length(20, allow_empty=True)),
+            ('value', big_endian_int),
+            ('data', binary),
+            ('v', big_endian_int),
+            ('r', big_endian_int),
+            ('s', big_endian_int),
+        ]
         
-        # Calculate chain_id from v (EIP-155)
-        if self.v >= 35:
-            chain_id = (self.v - 35) // 2
-            v = self.v - chain_id * 2 - 35 + 27
-        else:
-            chain_id = None
-            v = self.v
+        def __init__(self, nonce=0, gas_price=0, gas_limit=0, to=b'', value=0, data=b'', v=0, r=0, s=0):
+            super(RLPTransaction, self).__init__(nonce, gas_price, gas_limit, to, value, data, v, r, s)
+            self._sender = None
+            self._hash = None
         
-        # Create unsigned transaction for signing hash
-        unsigned_tx = Transaction(
-            nonce=self.nonce,
-            gas_price=self.gas_price,
-            gas_limit=self.gas_limit,
-            to=self.to,
-            value=self.value,
-            data=self.data,
-            v=chain_id if chain_id else 0,
+        @property
+        def hash(self):
+            if self._hash is None:
+                self._hash = keccak(rlp.encode(self))
+            return self._hash
+        
+        @property
+        def sender(self):
+            if self._sender is None:
+                self._sender = self.recover_sender()
+            return self._sender
+        
+        def recover_sender(self):
+            """Recover sender address from signature using ecrecover"""
+            if self.v not in (27, 28) and self.v not in range(35, 100000):
+                raise ValueError(f"Invalid v value: {self.v}")
+            
+            # Calculate chain_id from v (EIP-155)
+            if self.v >= 35:
+                chain_id = (self.v - 35) // 2
+                v = self.v - chain_id * 2 - 35 + 27
+            else:
+                chain_id = None
+                v = self.v
+            
+            # Create unsigned transaction for signing hash
+            unsigned_tx = RLPTransaction(
+                nonce=self.nonce,
+                gas_price=self.gas_price,
+                gas_limit=self.gas_limit,
+                to=self.to,
+                value=self.value,
+                data=self.data,
+                v=chain_id if chain_id else 0,
+                r=0,
+                s=0
+            )
+            
+            if chain_id:
+                # EIP-155: hash(rlp([nonce, gasprice, startgas, to, value, data, chainid, 0, 0]))
+                msg_hash = keccak(rlp.encode(unsigned_tx))
+            else:
+                # Legacy: hash(rlp([nonce, gasprice, startgas, to, value, data]))
+                msg_hash = keccak(rlp.encode([
+                    self.nonce, self.gas_price, self.gas_limit,
+                    self.to, self.value, self.data
+                ]))
+            
+            # Recover public key
+            signature = keys.Signature(vrs=(v - 27, self.r, self.s))
+            public_key = signature.recover_public_key_from_msg_hash(msg_hash)
+            
+            # Get address from public key (last 20 bytes of keccak256(public_key))
+            address = keccak(public_key.to_bytes())[-20:]
+            return to_checksum_address(address)
+        
+        def to_dict(self):
+            """Convert to JSON-RPC format"""
+            return {
+                'nonce': hex(self.nonce),
+                'gasPrice': hex(self.gas_price),
+                'gas': hex(self.gas_limit),
+                'to': '0x' + self.to.hex() if self.to else None,
+                'value': hex(self.value),
+                'input': '0x' + self.data.hex(),
+                'v': hex(self.v),
+                'r': hex(self.r),
+                's': hex(self.s),
+                'hash': '0x' + self.hash.hex(),
+                'from': self.sender
+            }
+    
+    def decode_raw_transaction(raw_tx_hex):
+        """
+        Decode a raw RLP-encoded transaction from MetaMask
+        Returns: RLPTransaction object
+        """
+        try:
+            # Remove 0x prefix if present
+            if raw_tx_hex.startswith('0x'):
+                raw_tx_hex = raw_tx_hex[2:]
+            
+            # Decode hex to bytes
+            raw_bytes = bytes.fromhex(raw_tx_hex)
+            
+            # Decode RLP
+            tx = rlp.decode(raw_bytes, RLPTransaction)
+            
+            # Verify signature and recover sender
+            sender = tx.sender
+            
+            print(f"✅ Decoded transaction from {sender}")
+            print(f"   Nonce: {tx.nonce}")
+            print(f"   To: 0x{tx.to.hex() if tx.to else 'CONTRACT_CREATION'}")
+            print(f"   Value: {tx.value} wei")
+            print(f"   Gas: {tx.gas_limit} @ {tx.gas_price} wei")
+            
+            return tx
+            
+        except Exception as e:
+            print(f"❌ Transaction decode failed: {e}")
+            raise
+    
+    def create_raw_transaction(nonce, gas_price, gas_limit, to, value, data, chain_id=CHAIN_ID):
+        """
+        Create an unsigned transaction for wallet signing
+        """
+        to_bytes = bytes.fromhex(to[2:]) if to and to.startswith('0x') else b''
+        data_bytes = bytes.fromhex(data[2:]) if data and data.startswith('0x') else b''
+        
+        tx = RLPTransaction(
+            nonce=nonce,
+            gas_price=gas_price,
+            gas_limit=gas_limit,
+            to=to_bytes,
+            value=value,
+            data=data_bytes,
+            v=chain_id,
             r=0,
             s=0
         )
         
+        return tx
+    
+    def sign_transaction(tx, private_key_hex):
+        """
+        Sign a transaction with a private key
+        Returns: signed RLPTransaction object
+        """
+        # Remove 0x prefix
+        if private_key_hex.startswith('0x'):
+            private_key_hex = private_key_hex[2:]
+        
+        private_key = keys.PrivateKey(bytes.fromhex(private_key_hex))
+        
+        # Get chain_id from v field
+        chain_id = tx.v if tx.v > 0 else None
+        
+        # Create signing hash
         if chain_id:
-            # EIP-155: hash(rlp([nonce, gasprice, startgas, to, value, data, chainid, 0, 0]))
-            msg_hash = keccak(rlp.encode(unsigned_tx))
+            # EIP-155
+            msg_hash = keccak(rlp.encode(tx))
         else:
-            # Legacy: hash(rlp([nonce, gasprice, startgas, to, value, data]))
+            # Legacy
             msg_hash = keccak(rlp.encode([
-                self.nonce, self.gas_price, self.gas_limit,
-                self.to, self.value, self.data
+                tx.nonce, tx.gas_price, tx.gas_limit,
+                tx.to, tx.value, tx.data
             ]))
         
-        # Recover public key
-        signature = keys.Signature(vrs=(v - 27, self.r, self.s))
-        public_key = signature.recover_public_key_from_msg_hash(msg_hash)
+        # Sign
+        signature = private_key.sign_msg_hash(msg_hash)
         
-        # Get address from public key (last 20 bytes of keccak256(public_key))
-        address = keccak(public_key.to_bytes())[-20:]
-        return to_checksum_address(address)
-    
-    def to_dict(self):
-        """Convert to JSON-RPC format"""
-        return {
-            'nonce': hex(self.nonce),
-            'gasPrice': hex(self.gas_price),
-            'gas': hex(self.gas_limit),
-            'to': '0x' + self.to.hex() if self.to else None,
-            'value': hex(self.value),
-            'input': '0x' + self.data.hex(),
-            'v': hex(self.v),
-            'r': hex(self.r),
-            's': hex(self.s),
-            'hash': '0x' + self.hash.hex(),
-            'from': self.sender
-        }
-
-
-# ==================== TRANSACTION DECODING ====================
-
-def decode_raw_transaction(raw_tx_hex):
-    """
-    Decode a raw RLP-encoded transaction from MetaMask
-    Returns: Transaction object
-    """
-    try:
-        # Remove 0x prefix if present
-        if raw_tx_hex.startswith('0x'):
-            raw_tx_hex = raw_tx_hex[2:]
+        # Apply EIP-155
+        if chain_id:
+            v = signature.v + chain_id * 2 + 35
+        else:
+            v = signature.v + 27
         
-        # Decode hex to bytes
-        raw_bytes = bytes.fromhex(raw_tx_hex)
-        
-        # Decode RLP
-        tx = rlp.decode(raw_bytes, Transaction)
-        
-        # Verify signature and recover sender
-        sender = tx.sender
-        
-        print(f"✅ Decoded transaction from {sender}")
-        print(f"   Nonce: {tx.nonce}")
-        print(f"   To: 0x{tx.to.hex() if tx.to else 'CONTRACT_CREATION'}")
-        print(f"   Value: {tx.value} wei")
-        print(f"   Gas: {tx.gas_limit} @ {tx.gas_price} wei")
-        
-        return tx
-        
-    except Exception as e:
-        print(f"❌ Transaction decode failed: {e}")
-        raise
-
-
-# ==================== TRANSACTION ENCODING ====================
-
-def create_raw_transaction(nonce, gas_price, gas_limit, to, value, data, chain_id=16523431):
-    """
-    Create an unsigned transaction for wallet signing
-    """
-    to_bytes = bytes.fromhex(to[2:]) if to and to.startswith('0x') else b''
-    data_bytes = bytes.fromhex(data[2:]) if data and data.startswith('0x') else b''
-    
-    tx = Transaction(
-        nonce=nonce,
-        gas_price=gas_price,
-        gas_limit=gas_limit,
-        to=to_bytes,
-        value=value,
-        data=data_bytes,
-        v=chain_id,
-        r=0,
-        s=0
-    )
-    
-    return tx
-
-
-def sign_transaction(tx, private_key_hex):
-    """
-    Sign a transaction with a private key
-    Returns: signed Transaction object
-    """
-    # Remove 0x prefix
-    if private_key_hex.startswith('0x'):
-        private_key_hex = private_key_hex[2:]
-    
-    private_key = keys.PrivateKey(bytes.fromhex(private_key_hex))
-    
-    # Get chain_id from v field
-    chain_id = tx.v if tx.v > 0 else None
-    
-    # Create signing hash
-    if chain_id:
-        # EIP-155
-        msg_hash = keccak(rlp.encode(tx))
-    else:
-        # Legacy
-        msg_hash = keccak(rlp.encode([
-            tx.nonce, tx.gas_price, tx.gas_limit,
-            tx.to, tx.value, tx.data
-        ]))
-    
-    # Sign
-    signature = private_key.sign_msg_hash(msg_hash)
-    
-    # Apply EIP-155
-    if chain_id:
-        v = signature.v + chain_id * 2 + 35
-    else:
-        v = signature.v + 27
-    
-    # Create signed transaction
-    signed_tx = Transaction(
-        nonce=tx.nonce,
-        gas_price=tx.gas_price,
-        gas_limit=tx.gas_limit,
-        to=tx.to,
-        value=tx.value,
-        data=tx.data,
-        v=v,
-        r=signature.r,
-        s=signature.s
-    )
-    
-    return signed_tx
-
-
-def encode_raw_transaction(tx):
-    """
-    Encode a transaction to raw RLP format for broadcasting
-    """
-    return '0x' + rlp.encode(tx).hex()
-
-
-# ==================== WALLET FUNCTIONS ====================
-
-def create_wallet():
-    """Create a new Ethereum wallet"""
-    private_key = keys.PrivateKey(os.urandom(32))
-    public_key = private_key.public_key
-    address = public_key.to_checksum_address()
-    
-    return {
-        'address': address,
-        'privateKey': '0x' + private_key.to_hex()[2:]
-    }
-
-
-def private_key_to_address(private_key_hex):
-    """Convert private key to address"""
-    if private_key_hex.startswith('0x'):
-        private_key_hex = private_key_hex[2:]
-    
-    private_key = keys.PrivateKey(bytes.fromhex(private_key_hex))
-    return private_key.public_key.to_checksum_address()
-
-
-# ==================== INTEGRATION WITH YOUR BLOCKCHAIN ====================
-
-def integrate_with_velvet_chain(blockchain_tx_class):
-    """
-    Adapter to convert between RLP Transaction and your VelvetChain Transaction
-    """
-    
-    def rlp_to_velvet(rlp_tx):
-        """Convert RLP transaction to VelvetChain transaction"""
-        return blockchain_tx_class(
-            nonce=rlp_tx.nonce,
-            gas_price=rlp_tx.gas_price,
-            gas_limit=rlp_tx.gas_limit,
-            to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
-            value=rlp_tx.value,
-            data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
-            chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else 0,
-            v=rlp_tx.v,
-            r=rlp_tx.r,
-            s=rlp_tx.s,
-            from_addr=rlp_tx.sender,
-            tx_type=1 if not rlp_tx.to else 0  # Contract creation if no 'to' address
+        # Create signed transaction
+        signed_tx = RLPTransaction(
+            nonce=tx.nonce,
+            gas_price=tx.gas_price,
+            gas_limit=tx.gas_limit,
+            to=tx.to,
+            value=tx.value,
+            data=tx.data,
+            v=v,
+            r=signature.r,
+            s=signature.s
         )
-    
-    return rlp_to_velvet
-
-
-# ==================== FLASK API ENDPOINT ====================
-
-def setup_metamask_endpoints(app, blockchain, p2p_network):
-    """
-    Add production-ready MetaMask endpoints to Flask app
-    """
-    
-    @app.route('/', methods=['POST'])
-    def json_rpc():
-        data = request.json
-        method = data.get('method')
-        params = data.get('params', [])
-        rpc_id = data.get('id', 1)
         
-        try:
-            if method == 'eth_sendRawTransaction':
-                raw_tx_hex = params[0] if params else None
-                if not raw_tx_hex:
-                    return jsonify({
-                        'jsonrpc': '2.0',
-                        'id': rpc_id,
-                        'error': {'code': -32602, 'message': 'missing raw transaction'}
-                    })
-                
-                try:
-                    # Decode RLP transaction
-                    rlp_tx = decode_raw_transaction(raw_tx_hex)
-                    
-                    # Convert to VelvetChain transaction format
-                    from_velvet_tx_class = blockchain.Transaction  # Your Transaction class
-                    converter = integrate_with_velvet_chain(from_velvet_tx_class)
-                    velvet_tx = converter(rlp_tx)
-                    
-                    # Add to blockchain mempool
-                    tx_hash = blockchain.add_transaction(velvet_tx)
-                    
-                    if tx_hash:
-                        # Broadcast to network
-                        p2p_network.broadcast_transaction(velvet_tx)
-                        
-                        print(f"✅ MetaMask transaction accepted: {tx_hash}")
-                        result = tx_hash
-                    else:
-                        return jsonify({
-                            'jsonrpc': '2.0',
-                            'id': rpc_id,
-                            'error': {'code': -32603, 'message': 'Transaction validation failed'}
-                        })
-                
-                except Exception as e:
-                    print(f"❌ Raw transaction error: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    return jsonify({
-                        'jsonrpc': '2.0',
-                        'id': rpc_id,
-                        'error': {'code': -32603, 'message': str(e)}
-                    })
-            
-            elif method == 'eth_estimateGas':
-                # Return realistic gas estimate
-                tx_params = params[0] if params else {}
-                
-                # Check if contract creation
-                if not tx_params.get('to'):
-                    result = hex(53000)  # CONTRACT_CREATION_GAS
-                else:
-                    # Check if has data (contract call)
-                    if tx_params.get('data') and tx_params['data'] != '0x':
-                        result = hex(50000)  # CONTRACT_CALL_GAS
-                    else:
-                        result = hex(21000)  # BASE_TX_GAS
-            
-            elif method == 'eth_call':
-                # Execute read-only call
-                # For now return empty result
-                result = '0x'
-            
-            elif method == 'eth_getTransactionReceipt':
-                tx_hash = params[0] if params else None
-                receipt = blockchain.get_transaction_receipt(tx_hash)
-                
-                if receipt:
-                    result = receipt.to_dict()
-                else:
-                    result = None
-            
-            elif method == 'eth_getBlockByNumber':
-                block_num = params[0] if params else 'latest'
-                include_txs = params[1] if len(params) > 1 else False
-                
-                if block_num == 'latest':
-                    block = blockchain.get_latest_block()
-                elif block_num == 'earliest':
-                    block = blockchain.get_block_by_number(0)
-                elif block_num == 'pending':
-                    block = None
-                else:
-                    block = blockchain.get_block_by_number(int(block_num, 16))
-                
-                if block:
-                    result = block.to_dict() if include_txs else {
-                        **block.to_dict(),
-                        'transactions': [tx.hash for tx in block.transactions]
-                    }
-                else:
-                    result = None
-            
-            elif method == 'eth_getBalance':
-                address = params[0] if params else None
-                balance = blockchain.get_balance(address)
-                result = hex(balance)
-            
-            elif method == 'eth_getTransactionCount':
-                address = params[0] if params else None
-                nonce = blockchain.get_nonce(address)
-                result = hex(nonce)
-            
-            elif method == 'eth_gasPrice':
-                result = hex(blockchain.base_fee_per_gas)
-            
-            elif method == 'eth_chainId':
-                result = hex(16523431)
-            
-            elif method == 'net_version':
-                result = str(16523431)
-            
-            elif method == 'eth_blockNumber':
-                result = hex(blockchain.get_latest_block().number)
-            
-            elif method == 'web3_clientVersion':
-                result = "VelvetChain/2.0.0-production"
-            
-            else:
-                return jsonify({
-                    'jsonrpc': '2.0',
-                    'id': rpc_id,
-                    'error': {'code': -32601, 'message': f'Method {method} not supported'}
-                })
-            
-            return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 'result': result})
+        return signed_tx
+    
+    def encode_raw_transaction(tx):
+        """
+        Encode a transaction to raw RLP format for broadcasting
+        """
+        return '0x' + rlp.encode(tx).hex()
+    
+    def create_eth_wallet():
+        """Create a new Ethereum wallet"""
+        private_key = keys.PrivateKey(os.urandom(32))
+        public_key = private_key.public_key
+        address = public_key.to_checksum_address()
         
-        except Exception as e:
-            print(f"❌ RPC Error: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({
-                'jsonrpc': '2.0',
-                'id': rpc_id,
-                'error': {'code': -32603, 'message': str(e)}
-            })
+        return {
+            'address': address,
+            'privateKey': '0x' + private_key.to_hex()[2:]
+        }
+    
+    def private_key_to_address(private_key_hex):
+        """Convert private key to address"""
+        if private_key_hex.startswith('0x'):
+            private_key_hex = private_key_hex[2:]
+        
+        private_key = keys.PrivateKey(bytes.fromhex(private_key_hex))
+        return private_key.public_key.to_checksum_address()
 
+# ==================== WALLET ====================
 
-# ==================== USAGE EXAMPLE ====================
-
-if __name__ == '__main__':
-    # Test RLP encoding/decoding
-    print("Testing RLP Transaction Encoding/Decoding...")
-    
-    # Create transaction
-    tx = create_raw_transaction(
-        nonce=0,
-        gas_price=20000000000,
-        gas_limit=21000,
-        to='0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
-        value=1000000000000000000,
-        data='0x',
-        chain_id=16523431
-    )
-    
-    # Sign it
-    private_key = '0x' + 'a' * 64  # Example key
-    signed_tx = sign_transaction(tx, private_key)
-    
-    # Encode to raw format
-    raw_tx = encode_raw_transaction(signed_tx)
-    print(f"\nRaw transaction: {raw_tx[:66]}...")
-    
-    # Decode it back
-    decoded_tx = decode_raw_transaction(raw_tx)
-    print(f"\nDecoded transaction:")
-    print(f"  From: {decoded_tx.sender}")
-    print(f"  To: 0x{decoded_tx.to.hex()}")
-    print(f"  Value: {decoded_tx.value} wei")
-    print(f"  Nonce: {decoded_tx.nonce}")
-    
-    print("\n✅ All tests passed!")
 class Wallet:
     """Ethereum-style wallet with private/public key"""
     
@@ -563,7 +347,7 @@ class Wallet:
         else:
             # Simplified version without cryptography
             if private_key:
-                self.private_key_hex = private_key
+                self.private_key_hex = private_key if private_key.startswith('0x') else '0x' + private_key
             else:
                 self.private_key_hex = '0x' + secrets.token_hex(32)
             
@@ -1296,7 +1080,6 @@ class VelvetChain:
                 for tx in block.transactions:
                     if tx.hash == tx_hash:
                         return tx, block
-        return None, None
 
 # ==================== P2P NETWORKING ====================
 
@@ -1488,8 +1271,18 @@ def json_rpc():
             result = hex(blockchain.base_fee_per_gas)
         
         elif method == 'eth_estimateGas':
-            # Return estimated gas for transaction
-            result = hex(BASE_TX_GAS)
+            tx_params = params[0] if params else {}
+            # Check if contract creation
+            if not tx_params.get('to'):
+                result = hex(CONTRACT_CREATION_GAS)
+            elif tx_params.get('data') and tx_params['data'] != '0x':
+                result = hex(CONTRACT_CALL_GAS)
+            else:
+                result = hex(BASE_TX_GAS)
+        
+        elif method == 'eth_call':
+            # Execute read-only call - return empty for now
+            result = '0x'
         
         elif method == 'net_version':
             result = str(CHAIN_ID)
@@ -1499,14 +1292,22 @@ def json_rpc():
         
         elif method == 'eth_getBlockByNumber':
             block_num_hex = params[0] if params else 'latest'
+            include_txs = params[1] if len(params) > 1 else False
+            
             if block_num_hex == 'latest':
                 block = blockchain.get_latest_block()
+            elif block_num_hex == 'earliest':
+                block = blockchain.get_block_by_number(0)
+            elif block_num_hex == 'pending':
+                block = None
             else:
-                block_num = int(block_num_hex, 16)
-                block = blockchain.get_block_by_number(block_num)
+                block = blockchain.get_block_by_number(int(block_num_hex, 16))
             
             if block:
-                result = block.to_dict()
+                result = block.to_dict() if include_txs else {
+                    **block.to_dict(),
+                    'transactions': [tx.hash for tx in block.transactions]
+                }
             else:
                 result = None
         
@@ -1532,12 +1333,6 @@ def json_rpc():
             receipt = blockchain.get_transaction_receipt(tx_hash)
             result = receipt.to_dict() if receipt else None
         
-        elif method == 'web3_clientVersion':
-            result = f"VelvetChain/{VERSION}"
-        
-        elif method == 'net_peerCount':
-            result = hex(len(p2p_network.peers))
-        
         elif method == 'eth_sendRawTransaction':
             raw_tx_hex = params[0] if params else None
             if not raw_tx_hex:
@@ -1547,9 +1342,60 @@ def json_rpc():
                     'error': {'code': -32602, 'message': 'missing raw transaction'}
                 })
             
-            # Parse raw transaction (simplified)
-            # In production, would properly decode RLP-encoded transaction
-            result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
+            if RLP_AVAILABLE:
+                try:
+                    # Decode RLP transaction
+                    rlp_tx = decode_raw_transaction(raw_tx_hex)
+                    
+                    # Convert to VelvetChain transaction
+                    tx = Transaction(
+                        nonce=rlp_tx.nonce,
+                        gas_price=rlp_tx.gas_price,
+                        gas_limit=rlp_tx.gas_limit,
+                        to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
+                        value=rlp_tx.value,
+                        data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
+                        chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
+                        v=rlp_tx.v,
+                        r=rlp_tx.r,
+                        s=rlp_tx.s,
+                        from_addr=rlp_tx.sender,
+                        tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
+                    )
+                    
+                    # Add to blockchain mempool
+                    tx_hash = blockchain.add_transaction(tx)
+                    
+                    if tx_hash:
+                        # Broadcast to network
+                        p2p_network.broadcast_transaction(tx)
+                        print(f"✅ MetaMask transaction accepted: {tx_hash}")
+                        result = tx_hash
+                    else:
+                        return jsonify({
+                            'jsonrpc': '2.0',
+                            'id': rpc_id,
+                            'error': {'code': -32603, 'message': 'Transaction validation failed'}
+                        })
+                
+                except Exception as e:
+                    print(f"❌ Raw transaction error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return jsonify({
+                        'jsonrpc': '2.0',
+                        'id': rpc_id,
+                        'error': {'code': -32603, 'message': str(e)}
+                    })
+            else:
+                # Simplified mode - hash the raw tx
+                result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
+        
+        elif method == 'web3_clientVersion':
+            result = f"VelvetChain/{VERSION}"
+        
+        elif method == 'net_peerCount':
+            result = hex(len(p2p_network.peers))
         
         else:
             return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 
@@ -1648,16 +1494,20 @@ def send_transaction():
         return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/api/wallet/create', methods=['POST'])
-def create_wallet():
+def create_wallet_endpoint():
     """Create a new wallet"""
-    wallet = Wallet.create_wallet()
-    return jsonify({
-        'address': wallet.address,
-        'privateKey': wallet.private_key_hex
-    })
+    if RLP_AVAILABLE:
+        wallet_data = create_eth_wallet()
+    else:
+        wallet = Wallet.create_wallet()
+        wallet_data = {
+            'address': wallet.address,
+            'privateKey': wallet.private_key_hex
+        }
+    return jsonify(wallet_data)
 
 @app.route('/api/wallet/sign', methods=['POST'])
-def sign_transaction():
+def sign_transaction_endpoint():
     """Sign a transaction with private key"""
     try:
         data = request.json
@@ -1767,14 +1617,22 @@ def main():
     
     # Create wallet if requested
     if args.create_wallet:
-        wallet = Wallet.create_wallet()
-        print(f"\n💎 New Wallet Created!")
-        print(f"{'='*60}")
-        print(f"Address:     {wallet.address}")
-        print(f"Private Key: {wallet.private_key_hex}")
-        print(f"{'='*60}")
+        if RLP_AVAILABLE:
+            wallet_data = create_eth_wallet()
+            print(f"\n💎 New Wallet Created!")
+            print(f"{'='*60}")
+            print(f"Address:     {wallet_data['address']}")
+            print(f"Private Key: {wallet_data['privateKey']}")
+            print(f"{'='*60}")
+        else:
+            wallet = Wallet.create_wallet()
+            print(f"\n💎 New Wallet Created!")
+            print(f"{'='*60}")
+            print(f"Address:     {wallet.address}")
+            print(f"Private Key: {wallet.private_key_hex}")
+            print(f"{'='*60}")
         print(f"\n⚠️  SAVE YOUR PRIVATE KEY SECURELY!")
-        print(f"   Use --wallet {wallet.address} to mine")
+        print(f"   Use --wallet <ADDRESS> to mine")
         print(f"\n")
         sys.exit(0)
     
