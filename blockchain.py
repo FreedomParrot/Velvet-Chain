@@ -790,29 +790,31 @@ def json_rpc():
         elif method == 'eth_blockNumber':
             result = hex(blockchain.get_latest_block().number)
         elif method == 'eth_getBalance':
-            address = params[0] if params else None
-            result = hex(blockchain.get_balance(address)) if address else '0x0'
+            ...
         elif method == 'eth_getTransactionCount':
-            address = params[0] if params else None
-            result = hex(blockchain.get_nonce(address)) if address else '0x0'
+            ...
         elif method == 'eth_gasPrice':
-            result = '0x3b9aca00'
+            ...
         elif method == 'net_version':
-            result = str(CHAIN_ID)
+            ...
         elif method == 'eth_accounts':
-            result = []
+            ...
         elif method == 'eth_getBlockByNumber':
-            block_param = params[0] if params else 'latest'
-            if block_param == 'latest':
-                block = blockchain.get_latest_block()
-            else:
-                block_num = int(block_param, 16)
-                block = blockchain.get_block_by_number(block_num)
-            result = block.to_dict() if block else None
+            ...
         elif method == 'web3_clientVersion':
-            result = f'VelvetChain/v{VERSION}'
+            ...
         elif method == 'net_peerCount':
             result = hex(len(p2p_network.peers))
+        elif method == 'eth_sendRawTransaction':
+            raw_tx_hex = params[0] if params else None
+            if not raw_tx_hex:
+                return jsonify({
+                    'jsonrpc': '2.0',
+                    'id': rpc_id,
+                    'error': {'code': -32602, 'message': 'missing raw transaction'}
+                })
+            tx_hash = handle_raw_transaction(raw_tx_hex)
+            result = tx_hash
         else:
             return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 
                           'error': {'code': -32601, 'message': f'Method {method} not found'}})
@@ -821,6 +823,7 @@ def json_rpc():
     except Exception as e:
         return jsonify({'jsonrpc': '2.0', 'id': rpc_id,
                        'error': {'code': -32603, 'message': str(e)}})
+
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
