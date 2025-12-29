@@ -360,15 +360,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🌍 Community
 
-### Join Us!
-
-- 💬 **Discord:** https://discord.gg/velvetchain
-- 🐦 **Twitter:** https://twitter.com/velvetchain
-- 📱 **Telegram:** https://t.me/velvetchain
-- 📧 **Email:** hello@velvetchain.network
-- 🌐 **Website:** https://velvetchain.network
 
 ### Community Nodes
 
