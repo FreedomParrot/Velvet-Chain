@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """
 Velvet Chain - Decentralized EVM-Compatible Blockchain
-Community Mining Edition - Fixed P2P Version
+Community Mining Edition - SYNC FIX
 
-Installation:
-    pip install flask flask-cors requests web3 eth-account
-
-Quick Start:
-    # Bootstrap Node (OWNER ONLY - on 173.255.229.107)
-    python blockchain.py --mine --wallet 0xd7e0aa3f99cc4addfd6797897df438a146a9e328 --bootstrap
-    
-    # Other Nodes (connect to bootstrap)
-    python blockchain.py --mine --wallet YOUR_WALLET --peer http://173.255.229.107:8545
+Key fixes:
+- Better initial sync with retries
+- Stop mining when longer chain detected
+- Improved peer connection handling
 """
 
 import argparse
@@ -27,28 +22,24 @@ import sys
 # ==================== VELVET CHAIN CONFIGURATION ====================
 
 CHAIN_ID = 16523431
-VERSION = "1.0.1"
+VERSION = "1.0.2-fixed"
 
-# Genesis Configuration - DO NOT MODIFY
 GENESIS_ADDRESS = "0xd7e0aa3f99cc4addfd6797897df438a146a9e328"
 INITIAL_SUPPLY = 1000000 * 10**18
 GENESIS_TIMESTAMP = 1735488000
 GENESIS_HASH = "0xa1c02b7107092ccef5e3a48711178e27018d74558fbb8cb564e235a4f2788eb1"
 
-# Mining Configuration
 BLOCK_TIME = 10
 MINING_REWARD = 50 * 10**18
 DIFFICULTY_ADJUSTMENT = 100
-TARGET_DIFFICULTY = 3
+TARGET_DIFFICULTY = 5  # Increased from 3 to 5 (much harder)
 
-# Network Configuration
 DEFAULT_PORT = 8545
 BOOTSTRAP_NODES = ["http://173.255.229.107:8545"]
 
-# P2P Configuration
 MAX_PEERS = 25
 PEER_DISCOVERY_INTERVAL = 30
-SYNC_INTERVAL = 60
+SYNC_INTERVAL = 30  # Check more frequently
 PEER_ANNOUNCE_INTERVAL = 45
 
 # ==================== BLOCKCHAIN CORE ====================
@@ -136,11 +127,11 @@ class Block:
         }
         return '0x' + hashlib.sha256(json.dumps(block_data, sort_keys=True).encode()).hexdigest()
     
-    def mine(self):
+    def mine(self, should_continue_callback):
         target = '0' * self.difficulty
         start_time = time.time()
         
-        while True:
+        while should_continue_callback():
             self.hash = self.calculate_hash()
             if self.hash[2:2+self.difficulty] == target:
                 elapsed = time.time() - start_time
@@ -155,6 +146,8 @@ class Block:
                 hashrate = self.nonce / elapsed if elapsed > 0 else 0
                 print(f"   Mining block #{self.number}... {self.nonce:,} attempts ({hashrate:.0f} H/s)", end='\r')
                 sys.stdout.flush()
+        
+        return False  # Mining was interrupted
     
     def to_dict(self):
         return {
@@ -198,6 +191,7 @@ class VelvetChain:
         self.nonces = {}
         self.miner_address = miner_address
         self.is_mining = False
+        self.mining_should_stop = False  # NEW: flag to stop mining
         self.difficulty = TARGET_DIFFICULTY
         self.total_difficulty = 0
         self.mining_thread = None
@@ -211,14 +205,13 @@ class VelvetChain:
     
     def _create_genesis(self):
         genesis = Block(0, GENESIS_TIMESTAMP, [], '0x' + '0' * 64, GENESIS_ADDRESS, difficulty=1)
-        genesis.nonce = 0  # Force nonce to 0
+        genesis.nonce = 0
         genesis.hash = genesis.calculate_hash()
         
         print(f"🔐 Genesis hash: {genesis.hash}")
         
         if genesis.hash != GENESIS_HASH:
             print(f"⚠️  Genesis hash mismatch - using hardcoded genesis")
-            # Use the official genesis instead of creating a new one
             genesis.hash = GENESIS_HASH
         
         self.chain.append(genesis)
@@ -251,6 +244,7 @@ class VelvetChain:
         
         with self.chain_lock:
             latest = self.chain[-1]
+            mining_block_num = latest.number + 1
             
             coinbase_tx = Transaction(
                 nonce=0, gas_price=0, gas_limit=0,
@@ -262,7 +256,7 @@ class VelvetChain:
             difficulty = self._calculate_difficulty()
             
             new_block = Block(
-                number=latest.number + 1,
+                number=mining_block_num,
                 timestamp=int(time.time()),
                 transactions=block_txs,
                 previous_hash=latest.hash,
@@ -272,13 +266,24 @@ class VelvetChain:
         
         print(f"⛏️  Mining block #{new_block.number} (difficulty: {difficulty})...")
         sys.stdout.flush()
-        new_block.mine()
+        
+        self.mining_should_stop = False
+        
+        # Pass callback to check if we should continue mining
+        success = new_block.mine(lambda: not self.mining_should_stop and self.is_mining)
+        
+        if not success:
+            print(f"\n⚠️  Mining interrupted for block #{new_block.number}")
+            return None
         
         with self.chain_lock:
-            if self.chain[-1].hash != new_block.previous_hash:
-                print("⚠️  Chain changed during mining")
+            # CRITICAL: Check if chain changed while we were mining
+            current_latest = self.chain[-1]
+            if current_latest.hash != new_block.previous_hash:
+                print(f"\n⚠️  Block #{new_block.number} discarded - peer block arrived first")
                 return None
             
+            # Apply transactions
             for tx in block_txs:
                 if tx == coinbase_tx:
                     addr = self.miner_address.lower()
@@ -337,7 +342,10 @@ class VelvetChain:
                     block = self.mine_block()
                     if block and p2p_network:
                         p2p_network.broadcast_block(block)
-                    time.sleep(1)
+                    
+                    # Wait a bit before starting next block to allow network blocks to arrive
+                    time.sleep(2)
+                    
                 except Exception as e:
                     print(f"❌ Mining error: {e}")
                     time.sleep(5)
@@ -347,6 +355,7 @@ class VelvetChain:
     
     def stop_mining(self):
         self.is_mining = False
+        self.mining_should_stop = True
     
     def get_balance(self, address):
         return self.balances.get(address.lower(), 0)
@@ -358,19 +367,29 @@ class VelvetChain:
         try:
             new_blocks = [Block.from_dict(b) for b in new_chain_data]
             
+            # ONLY replace if longer
             if len(new_blocks) <= len(self.chain):
                 return False
             
+            # Validate genesis
             if new_blocks[0].hash != GENESIS_HASH:
-                print(f"❌ REJECTED: Invalid genesis from peer!")
+                print(f"❌ REJECTED: Invalid genesis!")
                 print(f"   Expected: {GENESIS_HASH}")
                 print(f"   Got: {new_blocks[0].hash}")
                 return False
             
+            # Validate chain integrity
             for i in range(1, len(new_blocks)):
                 if new_blocks[i].previous_hash != new_blocks[i-1].hash:
                     print("❌ Invalid chain: broken links")
                     return False
+            
+            # Stop mining before replacing chain
+            was_mining = self.is_mining
+            if was_mining:
+                print("⏸️  Pausing mining for chain sync...")
+                self.mining_should_stop = True
+                time.sleep(0.5)  # Let current mining iteration finish
             
             with self.chain_lock:
                 print(f"🔄 Syncing {len(new_blocks)} blocks...")
@@ -379,6 +398,7 @@ class VelvetChain:
                 self.balances = {GENESIS_ADDRESS.lower(): INITIAL_SUPPLY}
                 self.nonces = {GENESIS_ADDRESS.lower(): 0}
                 
+                # Replay all transactions
                 for block in self.chain[1:]:
                     for tx in block.transactions:
                         sender = tx.from_addr.lower() if tx.from_addr else None
@@ -391,9 +411,14 @@ class VelvetChain:
                             self.balances[recipient] = self.balances.get(recipient, 0) + tx.value
                             self.nonces[sender] = self.nonces.get(sender, 0) + 1
                 
-                print(f"✅ Chain synced!")
+                print(f"✅ Chain synced to height {len(self.chain)-1}!")
                 self.synced = True
-                return True
+            
+            # Resume mining if it was active
+            if was_mining:
+                print("▶️  Resuming mining...")
+            
+            return True
                 
         except Exception as e:
             print(f"❌ Sync error: {e}")
@@ -409,31 +434,50 @@ class VelvetChain:
                 
                 latest = self.chain[-1]
                 
-                if new_block.previous_hash != latest.hash:
-                    if new_block.number <= latest.number:
-                        print(f"⚠️  Rejected old block #{new_block.number}")
-                    return False
-                
-                target = '0' * new_block.difficulty
-                if not new_block.hash.startswith('0x' + target):
-                    return False
-                
-                for tx in new_block.transactions:
-                    sender = tx.from_addr.lower() if tx.from_addr else None
-                    recipient = tx.to.lower() if tx.to else None
+                # EXACT MATCH - next block
+                if new_block.previous_hash == latest.hash and new_block.number == latest.number + 1:
+                    target = '0' * new_block.difficulty
+                    if not new_block.hash.startswith('0x' + target):
+                        return False
                     
-                    if sender == '0x0000000000000000000000000000000000000000':
-                        self.balances[recipient] = self.balances.get(recipient, 0) + tx.value
-                    elif sender and recipient:
-                        self.balances[sender] = self.balances.get(sender, 0) - tx.value
-                        self.balances[recipient] = self.balances.get(recipient, 0) + tx.value
-                        self.nonces[sender] = self.nonces.get(sender, 0) + 1
+                    if self.is_mining:
+                        self.mining_should_stop = True
+                    
+                    for tx in new_block.transactions:
+                        sender = tx.from_addr.lower() if tx.from_addr else None
+                        recipient = tx.to.lower() if tx.to else None
+                        
+                        if sender == '0x0000000000000000000000000000000000000000':
+                            self.balances[recipient] = self.balances.get(recipient, 0) + tx.value
+                        elif sender and recipient:
+                            self.balances[sender] = self.balances.get(sender, 0) - tx.value
+                            self.balances[recipient] = self.balances.get(recipient, 0) + tx.value
+                            self.nonces[sender] = self.nonces.get(sender, 0) + 1
+                    
+                    self.chain.append(new_block)
+                    print(f"✅ Block #{new_block.number} from peer")
+                    return True
                 
-                self.chain.append(new_block)
-                print(f"✅ Received block #{new_block.number}")
-                return True
+                # OLD BLOCK - Check if we're on different chains
+                elif new_block.number < latest.number:
+                    # Check if this block exists in our chain at that position
+                    if new_block.number < len(self.chain):
+                        our_block = self.chain[new_block.number]
+                        if our_block.hash != new_block.hash:
+                            # DIFFERENT BLOCK AT SAME HEIGHT = FORK!
+                            print(f"🔀 FORK at #{new_block.number}! Checking peer chains...")
+                            return "FORK_DETECTED"
+                    return False
                 
-        except:
+                # FUTURE BLOCK - we're behind
+                elif new_block.number > latest.number + 1:
+                    print(f"⚠️  Peer ahead by {new_block.number - latest.number} blocks. Syncing...")
+                    return "NEED_SYNC"
+                
+                return False
+                
+        except Exception as e:
+            print(f"❌ Block error: {e}")
             return False
     
     def get_block_by_number(self, number):
@@ -487,8 +531,9 @@ class P2PNetwork:
                         try:
                             response = requests.get(f"{bootstrap}/api/peers", timeout=5)
                             if response.status_code == 200:
-                                self.peers.add(bootstrap)
-                                print(f"✅ Connected: {bootstrap}")
+                                if bootstrap not in self.peers:
+                                    self.peers.add(bootstrap)
+                                    print(f"✅ Connected to peer: {bootstrap}")
                                 
                                 peer_list = response.json()
                                 for peer in peer_list[:MAX_PEERS]:
@@ -502,47 +547,69 @@ class P2PNetwork:
                 time.sleep(PEER_DISCOVERY_INTERVAL)
     
     def _sync_chain(self):
-        time.sleep(5)
-        
+        # Initial sync with better retry logic
         if not self.blockchain.is_bootstrap and not self.blockchain.synced:
-            print("🔄 Initial sync...")
-            for attempt in range(5):
-                for peer in BOOTSTRAP_NODES + ([self.manual_peer] if self.manual_peer else []):
+            print("🔄 Starting initial blockchain sync...")
+            
+            for attempt in range(10):  # More attempts
+                time.sleep(2)  # Wait a bit before each attempt
+                
+                peers_to_try = []
+                if self.manual_peer:
+                    peers_to_try.append(self.manual_peer)
+                peers_to_try.extend(BOOTSTRAP_NODES)
+                
+                for peer in peers_to_try:
                     try:
-                        response = requests.get(f"{peer}/api/chain", timeout=10)
+                        print(f"   Attempting sync from {peer}...")
+                        response = requests.get(f"{peer}/api/chain", timeout=15)
+                        
                         if response.status_code == 200:
                             peer_chain = response.json()
+                            
                             if len(peer_chain) > 0:
-                                print(f"📥 Downloading from {peer}...")
+                                print(f"   📥 Received {len(peer_chain)} blocks")
+                                
                                 if self.blockchain.replace_chain(peer_chain):
-                                    time.sleep(3)
+                                    print(f"✅ Successfully synced from {peer}!")
+                                    time.sleep(2)
                                     break
                     except Exception as e:
-                        print(f"❌ Sync failed: {e}")
+                        print(f"   ❌ Sync failed: {e}")
                 
                 if self.blockchain.synced:
                     break
-                    
-                if attempt < 4:
-                    print(f"⏳ Retry {attempt+1}/5...")
-                    time.sleep(5)
+                
+                if attempt < 9:
+                    wait_time = min(5 * (attempt + 1), 30)
+                    print(f"   ⏳ Retry {attempt+1}/10 in {wait_time}s...")
+                    time.sleep(wait_time)
+            
+            if not self.blockchain.synced:
+                print("❌ Could not sync blockchain after 10 attempts")
+                print("   Make sure bootstrap node is running and accessible")
         
+        # Continuous sync
         while True:
             try:
+                time.sleep(SYNC_INTERVAL)
+                
                 for peer in list(self.peers):
                     try:
                         response = requests.get(f"{peer}/api/chain", timeout=10)
                         if response.status_code == 200:
                             peer_chain = response.json()
+                            
+                            # If peer has longer chain, sync it
                             if len(peer_chain) > len(self.blockchain.chain):
+                                print(f"🔄 Peer has longer chain ({len(peer_chain)} vs {len(self.blockchain.chain)})")
                                 self.blockchain.replace_chain(peer_chain)
                                 break
                     except:
+                        # Remove dead peers
                         self.peers.discard(peer)
-                
-                time.sleep(SYNC_INTERVAL)
             except:
-                time.sleep(SYNC_INTERVAL)
+                pass
     
     def _announce_to_peers(self):
         while True:
@@ -569,6 +636,22 @@ class P2PNetwork:
             self.peers.add(peer_url)
             return True
         return False
+    
+    def force_sync(self):
+        """Force an immediate chain sync when fork is detected"""
+        print("🔄 Force sync initiated...")
+        for peer in list(self.peers):
+            try:
+                response = requests.get(f"{peer}/api/chain", timeout=10)
+                if response.status_code == 200:
+                    peer_chain = response.json()
+                    if len(peer_chain) > len(self.blockchain.chain):
+                        print(f"   Found longer chain ({len(peer_chain)} blocks)")
+                        self.blockchain.replace_chain(peer_chain)
+                        return
+            except:
+                pass
+        print("   No longer chain found")
 
 # ==================== API ====================
 
@@ -633,12 +716,13 @@ def get_stats():
         'chainId': CHAIN_ID,
         'peers': len(p2p_network.peers),
         'version': VERSION,
-        'isMining': blockchain.is_mining
+        'isMining': blockchain.is_mining,
+        'synced': blockchain.synced
     })
 
 @app.route('/api/chain', methods=['GET'])
 def get_chain():
-    limit = request.args.get('limit', 100, type=int)
+    limit = request.args.get('limit', 1000, type=int)
     with blockchain.chain_lock:
         return jsonify([block.to_dict() for block in blockchain.chain[-limit:]])
 
@@ -657,9 +741,24 @@ def get_address(address):
 
 @app.route('/api/block', methods=['POST'])
 def receive_block():
-    block_data = request.json
-    success = blockchain.add_block_from_peer(block_data)
-    return jsonify({'status': 'accepted' if success else 'rejected'})
+    try:
+        block_data = request.json
+        print(f"\n📨 Received block #{int(block_data['number'], 16)}")
+        result = blockchain.add_block_from_peer(block_data)
+        
+        print(f"   Result: {result}")
+        
+        # If fork detected or need sync, trigger it in background
+        if result == "FORK_DETECTED" or result == "NEED_SYNC":
+            threading.Thread(target=p2p_network.force_sync, daemon=True).start()
+            return jsonify({'status': 'sync_triggered'})
+        
+        return jsonify({'status': 'accepted' if result else 'rejected'})
+    except Exception as e:
+        print(f"❌ API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/api/peer/announce', methods=['POST'])
 def announce_peer():
@@ -673,7 +772,8 @@ def health():
     return jsonify({
         'status': 'healthy',
         'blockHeight': blockchain.get_latest_block().number if blockchain.chain else 0,
-        'peers': len(p2p_network.peers)
+        'peers': len(p2p_network.peers),
+        'synced': blockchain.synced
     })
 
 # ==================== MAIN ====================
@@ -691,8 +791,9 @@ def main():
     
     print("""
     ╔══════════════════════════════════════════════════════════╗
-    ║              🔗 VELVET CHAIN v1.0.1                    ║
+    ║              🔗 VELVET CHAIN v1.0.2-fixed              ║
     ║         Decentralized EVM-Compatible Blockchain          ║
+    ║                  SYNC ISSUES RESOLVED                    ║
     ╚══════════════════════════════════════════════════════════╝
     """)
     
@@ -708,18 +809,22 @@ def main():
     p2p_network = P2PNetwork(args.port, blockchain, manual_peer=args.peer)
     p2p_network.start()
     
+    # Wait for sync if not bootstrap
     if not args.bootstrap:
-        print("⏳ Syncing...")
-        for _ in range(30):
+        print("⏳ Waiting for initial sync...")
+        for i in range(120):  # 2 minutes max wait
             if blockchain.synced:
                 break
             time.sleep(1)
+            if i % 10 == 0 and i > 0:
+                print(f"   Still syncing... ({i}s)")
     
     if args.mine:
         if blockchain.synced or args.bootstrap:
             blockchain.start_mining()
         else:
-            print("❌ Cannot mine - not synced")
+            print("❌ Cannot mine - blockchain not synced!")
+            print("   Make sure bootstrap node is accessible")
     
     print(f"\n{'='*60}")
     print(f"🚀 Node Running")
@@ -727,7 +832,8 @@ def main():
     print(f"RPC:      http://localhost:{args.port}")
     print(f"Chain ID: {CHAIN_ID}")
     print(f"Type:     {'🏛️  BOOTSTRAP' if args.bootstrap else '🌐 Regular'}")
-    print(f"Mining:   {'✅' if args.mine else '❌'}")
+    print(f"Mining:   {'✅' if args.mine and blockchain.is_mining else '❌'}")
+    print(f"Synced:   {'✅' if blockchain.synced else '❌'}")
     if args.wallet:
         print(f"Wallet:   {args.wallet}")
         print(f"Balance:  {blockchain.get_balance(args.wallet) / 10**18:,.2f} VELVET")
