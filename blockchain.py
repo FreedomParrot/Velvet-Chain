@@ -47,7 +47,7 @@ GENESIS_TIMESTAMP = 1735488000
 BLOCK_TIME = 10  # Target: 10 seconds per block
 MINING_REWARD = 50 * 10**18  # 50 VELVET per block
 DIFFICULTY_ADJUSTMENT = 100
-TARGET_DIFFICULTY = 4
+TARGET_DIFFICULTY = 3  # Lower = faster mining (3 zeros instead of 4)
 
 # Network Configuration
 DEFAULT_PORT = 8545
@@ -154,17 +154,24 @@ class Block:
         target = '0' * self.difficulty
         start_time = time.time()
         
+        print(f"[DEBUG] Starting PoW mining, target: {target}, difficulty: {self.difficulty}")
+        sys.stdout.flush()
+        
         while True:
             self.hash = self.calculate_hash()
             if self.hash[2:2+self.difficulty] == target:
                 elapsed = time.time() - start_time
                 hashrate = self.nonce / elapsed if elapsed > 0 else 0
-                print(f"⛏️  Block #{self.number} mined! Hash: {self.hash[:16]}... ({hashrate:.0f} H/s)")
+                print(f"\n⛏️  Block #{self.number} mined! Hash: {self.hash[:16]}... ({hashrate:.0f} H/s)")
+                sys.stdout.flush()
                 return True
             self.nonce += 1
             
-            if self.nonce % 100000 == 0:
-                print(f"   Mining... {self.nonce:,} attempts", end='\r')
+            if self.nonce % 50000 == 0:
+                elapsed = time.time() - start_time
+                hashrate = self.nonce / elapsed if elapsed > 0 else 0
+                print(f"   Mining block #{self.number}... {self.nonce:,} attempts ({hashrate:.0f} H/s)", end='\r')
+                sys.stdout.flush()
     
     def to_dict(self):
         return {
@@ -256,6 +263,8 @@ class VelvetChain:
             print("❌ No miner address set")
             return None
         
+        print(f"[DEBUG] Starting to mine block...")
+        
         with self.chain_lock:
             latest = self.get_latest_block()
             
@@ -281,7 +290,8 @@ class VelvetChain:
                 difficulty=difficulty
             )
         
-        print(f"\n⛏️  Mining block #{new_block.number} (difficulty: {difficulty})...")
+        print(f"⛏️  Mining block #{new_block.number} (difficulty: {difficulty})...")
+        sys.stdout.flush()
         new_block.mine()
         
         with self.chain_lock:
@@ -337,21 +347,29 @@ class VelvetChain:
         self.is_mining = True
         
         def mining_loop():
-            print(f"⛏️  Mining started! Rewards → {self.miner_address}")
-            print(f"🎯 Target block time: {BLOCK_TIME}s | Reward: {MINING_REWARD / 10**18} VELVET\n")
+            print(f"⛏️  Mining thread started! Rewards → {self.miner_address}")
+            print(f"🎯 Target block time: {BLOCK_TIME}s | Reward: {MINING_REWARD / 10**18} VELVET")
+            sys.stdout.flush()
+            time.sleep(2)  # Give Flask time to start
             
             while self.is_mining:
                 try:
+                    print("[DEBUG] Mining loop iteration starting...")
+                    sys.stdout.flush()
                     block = self.mine_block()
                     if block and p2p_network:
                         p2p_network.broadcast_block(block)
                     time.sleep(1)
                 except Exception as e:
                     print(f"❌ Mining error: {e}")
+                    import traceback
+                    traceback.print_exc()
                     time.sleep(5)
         
         self.mining_thread = threading.Thread(target=mining_loop, daemon=True)
         self.mining_thread.start()
+        print("[DEBUG] Mining thread created and started")
+        sys.stdout.flush()
     
     def stop_mining(self):
         """Stop mining"""
