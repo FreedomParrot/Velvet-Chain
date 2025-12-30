@@ -488,13 +488,11 @@ class Transaction:
         self.from_addr = wallet.address
         self.hash = self._calculate_hash()
     
-    def verify(self):
-    """Verify transaction signature"""
-    # If from_addr is set and we have signature components, trust it
-    # (signature was already verified during RLP decode)
-    if self.from_addr and self.v > 0 and self.r > 0 and self.s > 0:
-        return True
-    return False
+def verify(self):
+        """Verify transaction signature"""
+        if self.from_addr and self.v > 0 and self.r > 0 and self.s > 0:
+            return True
+        return False
         
         # If this transaction came from MetaMask (has valid v, r, s values),
         # trust the signature recovery that already happened during RLP decode
