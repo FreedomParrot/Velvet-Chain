@@ -1315,7 +1315,6 @@ def json_rpc():
         
         elif method == 'eth_estimateGas':
             tx_params = params[0] if params else {}
-            # Check if contract creation
             if not tx_params.get('to'):
                 result = hex(CONTRACT_CREATION_GAS)
             elif tx_params.get('data') and tx_params['data'] != '0x':
@@ -1324,7 +1323,6 @@ def json_rpc():
                 result = hex(BASE_TX_GAS)
         
         elif method == 'eth_call':
-            # Execute read-only call - return empty for now
             result = '0x'
         
         elif method == 'net_version':
@@ -1376,7 +1374,7 @@ def json_rpc():
             receipt = blockchain.get_transaction_receipt(tx_hash)
             result = receipt.to_dict() if receipt else None
         
-         elif method == 'eth_sendRawTransaction':
+        elif method == 'eth_sendRawTransaction':
             raw_tx_hex = params[0] if params else None
             if not raw_tx_hex:
                 return jsonify({
@@ -1384,16 +1382,16 @@ def json_rpc():
                     'id': rpc_id,
                     'error': {'code': -32602, 'message': 'missing raw transaction'}
                 })
-        
+            
             if RLP_AVAILABLE:
                 try:
-                    # 1) Decode the raw transaction
+                    # Decode the raw transaction
                     rlp_tx = decode_raw_transaction(raw_tx_hex)
-        
-                    # 2) Convert RLP tx → VelvetChain internal tx object
+                    
+                    # Convert RLP tx to VelvetChain internal tx object
                     if isinstance(rlp_tx, EIP1559Transaction):
                         effective_gas_price = rlp_tx.max_fee_per_gas
-        
+                        
                         tx = Transaction(
                             nonce=rlp_tx.nonce,
                             gas_price=effective_gas_price,
@@ -1408,7 +1406,7 @@ def json_rpc():
                             from_addr=rlp_tx.sender,
                             tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
                         )
-        
+                    
                     else:
                         # Legacy transaction
                         tx = Transaction(
@@ -1425,10 +1423,10 @@ def json_rpc():
                             from_addr=rlp_tx.sender,
                             tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
                         )
-        
-                    # 3) Add to mempool
+                    
+                    # Add to mempool
                     tx_hash = blockchain.add_transaction(tx)
-        
+                    
                     if tx_hash:
                         # Broadcast to network
                         p2p_network.broadcast_transaction(tx)
@@ -1440,7 +1438,7 @@ def json_rpc():
                             'id': rpc_id,
                             'error': {'code': -32603, 'message': 'Transaction validation failed'}
                         })
-        
+                
                 except Exception as e:
                     print(f"❌ Raw transaction error: {e}")
                     import traceback
@@ -1448,12 +1446,34 @@ def json_rpc():
                     return jsonify({
                         'jsonrpc': '2.0',
                         'id': rpc_id,
-                        'error': {'code': -32603, 'message': str(e)}  # Fixed: removed extra quote
+                        'error': {'code': -32603, 'message': str(e)}
                     })
-        
+            
             else:
                 # Fallback mode
                 result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
+        
+        elif method == 'web3_clientVersion':
+            result = f"VelvetChain/{VERSION}"
+        
+        elif method == 'net_peerCount':
+            result = hex(len(p2p_network.peers))
+        
+        else:
+            return jsonify({
+                'jsonrpc': '2.0',
+                'id': rpc_id,
+                'error': {'code': -32601, 'message': f'Method {method} not found'}
+            })
+        
+        return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 'result': result})
+    
+    except Exception as e:
+        return jsonify({
+            'jsonrpc': '2.0',
+            'id': rpc_id,
+            'error': {'code': -32603, 'message': str(e)}
+        })
 
 
 @app.route('/api/stats', methods=['GET'])
