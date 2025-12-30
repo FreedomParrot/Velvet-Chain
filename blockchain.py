@@ -214,59 +214,45 @@ class EIP1559Transaction(rlp.Serializable):
         return to_checksum_address(keccak(pub.to_bytes())[-20:])
 
 def decode_raw_transaction(raw_tx_hex):
-    """
-    Decode raw Ethereum transaction (legacy + EIP-1559 typed tx)
-    Returns RLPTransaction + normalized numeric v,r,s
-    """
-
     if raw_tx_hex.startswith("0x"):
         raw_tx_hex = raw_tx_hex[2:]
 
-    raw_bytes = bytes.fromhex(raw_tx_hex)
+    raw = bytes.fromhex(raw_tx_hex)
 
-    # Typed transaction prefix (EIP-2718)
-    tx_type = None
-    if raw_bytes[0] in (1, 2):   # 0x01 = access list, 0x02 = EIP-1559
-        tx_type = raw_bytes[0]
-        raw_bytes = raw_bytes[1:]
+    # ---- Typed Transaction (EIP-2718 prefix) ----
+    if raw[0] == 2:
+        tx_type = 2
+        body = raw[1:]
 
-    tx = rlp.decode(raw_bytes, RLPTransaction)
+        tx = rlp.decode(body, EIP1559Transaction)
 
-    v = tx.v
-    r = tx.r
-    s = tx.s
+        v = int(tx.v)
+        r = int(tx.r)
+        s = int(tx.s)
 
-    # --- MetaMask typed tx fields come as bytes, convert to ints ---
-    if isinstance(v, (bytes, bytearray)):
-        v = int.from_bytes(v, "big")
+        sender = tx.sender
 
-    if isinstance(r, (bytes, bytearray)):
-        r = int.from_bytes(r, "big")
+        print("🔹 Decoded EIP-1559 transaction")
+        print("   From:", sender)
+        print("   Nonce:", tx.nonce)
+        print("   Value:", tx.value)
+        print("   GasLimit:", tx.gas_limit)
+        print("   MaxFee:", tx.max_fee_per_gas)
+        print("   MaxPriority:", tx.max_priority_fee_per_gas)
 
-    if isinstance(s, (bytes, bytearray)):
-        s = int.from_bytes(s, "big")
+        return tx
 
-    # Normalize chain_id rules
-    if v >= 35:
-        chain_id = (v - 35) // 2
+    # ---- Legacy transaction ----
+    tx = rlp.decode(raw, RLPTransaction)
+
+    if isinstance(tx.v, (bytes, bytearray)):
+        v = int.from_bytes(tx.v, 'big')
     else:
-        chain_id = CHAIN_ID
+        v = tx.v
 
-    # Re-create signature object safely
-    sig = keys.Signature(vrs=(v - 27 if v >= 27 else v, r, s))
-    msg_hash = keccak(rlp.encode(tx))
+    tx._sender = tx.recover_sender()
 
-    sender = sig.recover_public_key_from_msg_hash(msg_hash).to_checksum_address()
-
-    tx._sender = sender
-
-    print("🔹 Decoded transaction")
-    print("   Type:", "EIP-1559" if tx_type == 2 else "Legacy")
-    print("   From:", sender)
-    print("   Nonce:", tx.nonce)
-    print("   Value:", tx.value)
-    print("   Gas:", tx.gas_limit, "@", tx.gas_price)
-
+    print("🔹 Decoded Legacy transaction from", tx.sender)
     return tx
 
 
