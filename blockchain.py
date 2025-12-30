@@ -184,36 +184,118 @@ if RLP_AVAILABLE:
                 'from': self.sender
             }
     
-    def decode_raw_transaction(raw_tx_hex):
-        """
-        Decode a raw RLP-encoded transaction from MetaMask
-        Returns: RLPTransaction object
-        """
-        try:
-            # Remove 0x prefix if present
-            if raw_tx_hex.startswith('0x'):
-                raw_tx_hex = raw_tx_hex[2:]
-            
-            # Decode hex to bytes
-            raw_bytes = bytes.fromhex(raw_tx_hex)
-            
-            # Decode RLP
-            tx = rlp.decode(raw_bytes, RLPTransaction)
-            
-            # Verify signature and recover sender
-            sender = tx.sender
-            
-            print(f"✅ Decoded transaction from {sender}")
-            print(f"   Nonce: {tx.nonce}")
-            print(f"   To: 0x{tx.to.hex() if tx.to else 'CONTRACT_CREATION'}")
-            print(f"   Value: {tx.value} wei")
-            print(f"   Gas: {tx.gas_limit} @ {tx.gas_price} wei")
-            
+   def decode_raw_transaction(raw_tx_hex):
+    """
+    Supports:
+    - Legacy RLP transactions
+    - EIP-1559 typed transactions (0x02)
+    """
+
+    try:
+        # Strip 0x
+        if raw_tx_hex.startswith("0x"):
+            raw_tx_hex = raw_tx_hex[2:]
+
+        raw_bytes = bytes.fromhex(raw_tx_hex)
+
+        #
+        # Detect typed transaction
+        #
+        if raw_bytes[0] == 0x02:
+            print("🔹 EIP-1559 typed transaction detected")
+
+            # Body excludes prefix byte
+            body = raw_bytes[1:]
+
+            fields = rlp.decode(body)
+
+            (
+                chain_id,
+                nonce,
+                max_priority_fee_per_gas,
+                max_fee_per_gas,
+                gas_limit,
+                to,
+                value,
+                data,
+                access_list,
+                v,
+                r,
+                s
+            ) = fields
+
+            #
+            # Recover sender (per EIP-1559)
+            #
+            msg_hash = keccak(body)
+            sig = keys.Signature(vrs=(v - 27, r, s))
+            pub = sig.recover_public_key_from_msg_hash(msg_hash)
+            sender = to_checksum_address(keccak(pub.to_bytes())[-20:])
+
+            print(f"   From: {sender}")
+            print(f"   Nonce: {nonce}")
+            print(f"   Value: {value}")
+            print(f"   Gas: {gas_limit}")
+            print(f"   MaxFeePerGas: {max_fee_per_gas}")
+            print(f"   MaxPriorityFee: {max_priority_fee_per_gas}")
+
+            #
+            # Simplified fee model:
+            # we treat max_fee_per_gas as gasPrice
+            #
+            tx = Transaction(
+                nonce=int(nonce),
+                gas_price=int(max_fee_per_gas),
+                gas_limit=int(gas_limit),
+                to=('0x' + to.hex()) if to else None,
+                value=int(value),
+                data=('0x' + data.hex()) if data else '0x',
+                chain_id=int(chain_id),
+                v=int(v),
+                r=int(r),
+                s=int(s),
+                from_addr=sender,
+                tx_type=TX_TYPE_TRANSFER if to else TX_TYPE_CONTRACT_CREATION
+            )
+
+            print("✅ EIP-1559 transaction decoded successfully")
             return tx
-            
-        except Exception as e:
-            print(f"❌ Transaction decode failed: {e}")
-            raise
+
+        #
+        # Otherwise → Legacy RLP transaction (old behaviour)
+        #
+        tx = rlp.decode(raw_bytes, RLPTransaction)
+
+        sender = tx.sender
+
+        print("🔹 Legacy transaction detected")
+        print(f"   From: {sender}")
+        print(f"   Nonce: {tx.nonce}")
+        print(f"   Gas: {tx.gas_limit} @ {tx.gas_price}")
+        print(f"   To: {'0x'+tx.to.hex() if tx.to else 'CONTRACT_CREATE'}")
+
+        #
+        # Convert to internal Transaction
+        #
+        return Transaction(
+            nonce=tx.nonce,
+            gas_price=tx.gas_price,
+            gas_limit=tx.gas_limit,
+            to=('0x' + tx.to.hex()) if tx.to else None,
+            value=tx.value,
+            data=('0x' + tx.data.hex()) if tx.data else '0x',
+            chain_id=(tx.v - 35) // 2 if tx.v >= 35 else CHAIN_ID,
+            v=tx.v,
+            r=tx.r,
+            s=tx.s,
+            from_addr=sender,
+            tx_type=TX_TYPE_TRANSFER if tx.to else TX_TYPE_CONTRACT_CREATION
+        )
+
+    except Exception as e:
+        print(f"❌ Transaction decode failed: {e}")
+        raise
+
     
     def create_raw_transaction(nonce, gas_price, gas_limit, to, value, data, chain_id=CHAIN_ID):
         """
