@@ -53,7 +53,7 @@ except ImportError:
 CHAIN_ID = 16523431
 VERSION = "2.0.0-enhanced"
 
-GENESIS_ADDRESS = "0x16b1394752faf1c6e344cbc9a45f11fac67c9920"
+GENESIS_ADDRESS = "0xd7e0aa3f99cc4addfd6797897df438a146a9e328"
 INITIAL_SUPPLY = 1000000 * 10**18
 GENESIS_TIMESTAMP = 1735488000
 GENESIS_HASH = "0xa1c02b7107092ccef5e3a48711178e27018d74558fbb8cb564e235a4f2788eb1"
@@ -183,80 +183,37 @@ if RLP_AVAILABLE:
                 'hash': '0x' + self.hash.hex(),
                 'from': self.sender
             }
-class EIP1559Transaction(rlp.Serializable):
-    """
-    EIP-1559 Dynamic Fee Transaction (type 0x02)
-    """
-    fields = [
-        ('chain_id', big_endian_int),
-        ('nonce', big_endian_int),
-        ('max_priority_fee_per_gas', big_endian_int),
-        ('max_fee_per_gas', big_endian_int),
-        ('gas_limit', big_endian_int),
-        ('to', Binary.fixed_length(20, allow_empty=True)),
-        ('value', big_endian_int),
-        ('data', binary),
-        ('access_list', rlp.sedes.CountableList(rlp.sedes.List([]))),
-        ('v', big_endian_int),
-        ('r', big_endian_int),
-        ('s', big_endian_int),
-    ]
-
-    @property
-    def hash(self):
-        return keccak(b'\x02' + rlp.encode(self))
-
-    @property
-    def sender(self):
-        msg = keccak(b'\x02' + rlp.encode(self[:-3]))
-        sig = keys.Signature(vrs=(self.v, self.r, self.s))
-        pub = sig.recover_public_key_from_msg_hash(msg)
-        return to_checksum_address(keccak(pub.to_bytes())[-20:])
-
-def decode_raw_transaction(raw_tx_hex):
-    if raw_tx_hex.startswith("0x"):
-        raw_tx_hex = raw_tx_hex[2:]
-
-    raw = bytes.fromhex(raw_tx_hex)
-
-    # ---- Typed Transaction (EIP-2718 prefix) ----
-    if raw[0] == 2:
-        tx_type = 2
-        body = raw[1:]
-
-        tx = rlp.decode(body, EIP1559Transaction)
-
-        v = int(tx.v)
-        r = int(tx.r)
-        s = int(tx.s)
-
-        sender = tx.sender
-
-        print("🔹 Decoded EIP-1559 transaction")
-        print("   From:", sender)
-        print("   Nonce:", tx.nonce)
-        print("   Value:", tx.value)
-        print("   GasLimit:", tx.gas_limit)
-        print("   MaxFee:", tx.max_fee_per_gas)
-        print("   MaxPriority:", tx.max_priority_fee_per_gas)
-
-        return tx
-
-    # ---- Legacy transaction ----
-    tx = rlp.decode(raw, RLPTransaction)
-
-    if isinstance(tx.v, (bytes, bytearray)):
-        v = int.from_bytes(tx.v, 'big')
-    else:
-        v = tx.v
-
-    tx._sender = tx.recover_sender()
-
-    print("🔹 Decoded Legacy transaction from", tx.sender)
-    return tx
-
-
-
+    
+    def decode_raw_transaction(raw_tx_hex):
+        """
+        Decode a raw RLP-encoded transaction from MetaMask
+        Returns: RLPTransaction object
+        """
+        try:
+            # Remove 0x prefix if present
+            if raw_tx_hex.startswith('0x'):
+                raw_tx_hex = raw_tx_hex[2:]
+            
+            # Decode hex to bytes
+            raw_bytes = bytes.fromhex(raw_tx_hex)
+            
+            # Decode RLP
+            tx = rlp.decode(raw_bytes, RLPTransaction)
+            
+            # Verify signature and recover sender
+            sender = tx.sender
+            
+            print(f"✅ Decoded transaction from {sender}")
+            print(f"   Nonce: {tx.nonce}")
+            print(f"   To: 0x{tx.to.hex() if tx.to else 'CONTRACT_CREATION'}")
+            print(f"   Value: {tx.value} wei")
+            print(f"   Gas: {tx.gas_limit} @ {tx.gas_price} wei")
+            
+            return tx
+            
+        except Exception as e:
+            print(f"❌ Transaction decode failed: {e}")
+            raise
     
     def create_raw_transaction(nonce, gas_price, gas_limit, to, value, data, chain_id=CHAIN_ID):
         """
@@ -488,20 +445,10 @@ class Transaction:
         self.from_addr = wallet.address
         self.hash = self._calculate_hash()
     
-def verify(self):
+    def verify(self):
         """Verify transaction signature"""
-        if self.from_addr and self.v > 0 and self.r > 0 and self.s > 0:
-            return True
-        return False
-        
-        # If this transaction came from MetaMask (has valid v, r, s values),
-        # trust the signature recovery that already happened during RLP decode
-        if self.v > 0 and self.r > 0 and self.s > 0:
-            # Signature was already verified during decode_raw_transaction()
-            # The from_addr was recovered using proper ECDSA
-            return True
-        
-        # For internally created transactions, use simplified verification
+        if not self.from_addr:
+            return False
         signing_dict = {
             'nonce': self.nonce,
             'gasPrice': self.gas_price,
@@ -753,50 +700,34 @@ class VelvetChain:
         with self.chain_lock:
             return self.chain[-1] if self.chain else None
     
-def add_transaction(self, tx):
-    """Add transaction to mempool"""
-    print(f"🔍 DEBUG: Attempting to add transaction")
-    print(f"   From: {tx.from_addr}")
-    print(f"   To: {tx.to}")
-    print(f"   Value: {tx.value}")
-    print(f"   Nonce: {tx.nonce}")
-    print(f"   v={tx.v}, r={tx.r}, s={tx.s}")
-    
-    # Verify signature
-    verify_result = tx.verify()
-    print(f"   Signature verification: {verify_result}")
-    
-    if not verify_result:
-        print(f"❌ Invalid signature for tx {tx.hash[:16]}...")
-        return None
-    
-    # Check nonce
-    sender = tx.from_addr.lower()
-    expected_nonce = self.nonces.get(sender, 0)
-    print(f"   Expected nonce: {expected_nonce}, Got: {tx.nonce}")
-    
-    if tx.nonce != expected_nonce:
-        print(f"❌ Invalid nonce: got {tx.nonce}, expected {expected_nonce}")
-        return None
-    
-    # Check balance (value + max gas cost)
-    max_cost = tx.value + (tx.gas_limit * tx.gas_price)
-    current_balance = self.balances.get(sender, 0)
-    print(f"   Balance: {current_balance / 10**18} VELVET")
-    print(f"   Max cost: {max_cost / 10**18} VELVET")
-    
-    if current_balance < max_cost:
-        print(f"❌ Insufficient balance: need {max_cost / 10**18}, have {current_balance / 10**18}")
-        return None
-    
-    # Check gas price
-    if tx.gas_price < MIN_GAS_PRICE:
-        print(f"❌ Gas price too low: {tx.gas_price} < {MIN_GAS_PRICE}")
-        return None
-    
-    self.pending_transactions.append(tx)
-    print(f"✅ Transaction added to mempool: {tx.hash[:16]}...")
-    return tx.hash
+    def add_transaction(self, tx):
+        """Add transaction to mempool"""
+        # Verify signature
+        if not tx.verify():
+            print(f"❌ Invalid signature for tx {tx.hash[:16]}...")
+            return None
+        
+        # Check nonce
+        sender = tx.from_addr.lower()
+        expected_nonce = self.nonces.get(sender, 0)
+        if tx.nonce != expected_nonce:
+            print(f"❌ Invalid nonce: got {tx.nonce}, expected {expected_nonce}")
+            return None
+        
+        # Check balance (value + max gas cost)
+        max_cost = tx.value + (tx.gas_limit * tx.gas_price)
+        if self.balances.get(sender, 0) < max_cost:
+            print(f"❌ Insufficient balance: need {max_cost / 10**18}, have {self.balances.get(sender, 0) / 10**18}")
+            return None
+        
+        # Check gas price
+        if tx.gas_price < MIN_GAS_PRICE:
+            print(f"❌ Gas price too low: {tx.gas_price} < {MIN_GAS_PRICE}")
+            return None
+        
+        self.pending_transactions.append(tx)
+        print(f"✅ Transaction added to mempool: {tx.hash[:16]}...")
+        return tx.hash
     
     def get_block_reward(self, block_number):
         """Calculate block reward with halving"""
@@ -1341,6 +1272,7 @@ def json_rpc():
         
         elif method == 'eth_estimateGas':
             tx_params = params[0] if params else {}
+            # Check if contract creation
             if not tx_params.get('to'):
                 result = hex(CONTRACT_CREATION_GAS)
             elif tx_params.get('data') and tx_params['data'] != '0x':
@@ -1349,6 +1281,7 @@ def json_rpc():
                 result = hex(BASE_TX_GAS)
         
         elif method == 'eth_call':
+            # Execute read-only call - return empty for now
             result = '0x'
         
         elif method == 'net_version':
@@ -1411,46 +1344,26 @@ def json_rpc():
             
             if RLP_AVAILABLE:
                 try:
-                    # Decode the raw transaction
+                    # Decode RLP transaction
                     rlp_tx = decode_raw_transaction(raw_tx_hex)
                     
-                    # Convert RLP tx to VelvetChain internal tx object
-                    if isinstance(rlp_tx, EIP1559Transaction):
-                        effective_gas_price = rlp_tx.max_fee_per_gas
-                        
-                        tx = Transaction(
-                            nonce=rlp_tx.nonce,
-                            gas_price=effective_gas_price,
-                            gas_limit=rlp_tx.gas_limit,
-                            to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
-                            value=rlp_tx.value,
-                            data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
-                            chain_id=rlp_tx.chain_id,
-                            v=rlp_tx.v,
-                            r=rlp_tx.r,
-                            s=rlp_tx.s,
-                            from_addr=rlp_tx.sender,
-                            tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
-                        )
+                    # Convert to VelvetChain transaction
+                    tx = Transaction(
+                        nonce=rlp_tx.nonce,
+                        gas_price=rlp_tx.gas_price,
+                        gas_limit=rlp_tx.gas_limit,
+                        to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
+                        value=rlp_tx.value,
+                        data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
+                        chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
+                        v=rlp_tx.v,
+                        r=rlp_tx.r,
+                        s=rlp_tx.s,
+                        from_addr=rlp_tx.sender,
+                        tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
+                    )
                     
-                    else:
-                        # Legacy transaction
-                        tx = Transaction(
-                            nonce=rlp_tx.nonce,
-                            gas_price=rlp_tx.gas_price,
-                            gas_limit=rlp_tx.gas_limit,
-                            to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
-                            value=rlp_tx.value,
-                            data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
-                            chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
-                            v=rlp_tx.v,
-                            r=rlp_tx.r,
-                            s=rlp_tx.s,
-                            from_addr=rlp_tx.sender,
-                            tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
-                        )
-                    
-                    # Add to mempool
+                    # Add to blockchain mempool
                     tx_hash = blockchain.add_transaction(tx)
                     
                     if tx_hash:
@@ -1474,9 +1387,8 @@ def json_rpc():
                         'id': rpc_id,
                         'error': {'code': -32603, 'message': str(e)}
                     })
-            
             else:
-                # Fallback mode
+                # Simplified mode - hash the raw tx
                 result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
         
         elif method == 'web3_clientVersion':
@@ -1486,21 +1398,14 @@ def json_rpc():
             result = hex(len(p2p_network.peers))
         
         else:
-            return jsonify({
-                'jsonrpc': '2.0',
-                'id': rpc_id,
-                'error': {'code': -32601, 'message': f'Method {method} not found'}
-            })
+            return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 
+                          'error': {'code': -32601, 'message': f'Method {method} not found'}})
         
         return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 'result': result})
     
     except Exception as e:
-        return jsonify({
-            'jsonrpc': '2.0',
-            'id': rpc_id,
-            'error': {'code': -32603, 'message': str(e)}
-        })
-
+        return jsonify({'jsonrpc': '2.0', 'id': rpc_id,
+                       'error': {'code': -32603, 'message': str(e)}})
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
