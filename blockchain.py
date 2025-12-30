@@ -183,7 +183,36 @@ if RLP_AVAILABLE:
                 'hash': '0x' + self.hash.hex(),
                 'from': self.sender
             }
-    
+class EIP1559Transaction(rlp.Serializable):
+    """
+    EIP-1559 Dynamic Fee Transaction (type 0x02)
+    """
+    fields = [
+        ('chain_id', big_endian_int),
+        ('nonce', big_endian_int),
+        ('max_priority_fee_per_gas', big_endian_int),
+        ('max_fee_per_gas', big_endian_int),
+        ('gas_limit', big_endian_int),
+        ('to', Binary.fixed_length(20, allow_empty=True)),
+        ('value', big_endian_int),
+        ('data', binary),
+        ('access_list', rlp.sedes.CountableList(rlp.sedes.List([]))),
+        ('v', big_endian_int),
+        ('r', big_endian_int),
+        ('s', big_endian_int),
+    ]
+
+    @property
+    def hash(self):
+        return keccak(b'\x02' + rlp.encode(self))
+
+    @property
+    def sender(self):
+        msg = keccak(b'\x02' + rlp.encode(self[:-3]))
+        sig = keys.Signature(vrs=(self.v, self.r, self.s))
+        pub = sig.recover_public_key_from_msg_hash(msg)
+        return to_checksum_address(keccak(pub.to_bytes())[-20:])
+
 def decode_raw_transaction(raw_tx_hex):
     """
     Decode raw Ethereum transaction (legacy + EIP-1559 typed tx)
