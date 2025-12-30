@@ -1376,84 +1376,84 @@ def json_rpc():
             receipt = blockchain.get_transaction_receipt(tx_hash)
             result = receipt.to_dict() if receipt else None
         
- elif method == 'eth_sendRawTransaction':
-    raw_tx_hex = params[0] if params else None
-    if not raw_tx_hex:
-        return jsonify({
-            'jsonrpc': '2.0',
-            'id': rpc_id,
-            'error': {'code': -32602, 'message': 'missing raw transaction'}
-        })
-
-    if RLP_AVAILABLE:
-        try:
-            # 1) Decode the raw transaction
-            rlp_tx = decode_raw_transaction(raw_tx_hex)
-
-            # 2) Convert RLP tx → VelvetChain internal tx object
-            if isinstance(rlp_tx, EIP1559Transaction):
-                effective_gas_price = rlp_tx.max_fee_per_gas
-
-                tx = Transaction(
-                    nonce=rlp_tx.nonce,
-                    gas_price=effective_gas_price,
-                    gas_limit=rlp_tx.gas_limit,
-                    to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
-                    value=rlp_tx.value,
-                    data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
-                    chain_id=rlp_tx.chain_id,
-                    v=rlp_tx.v,
-                    r=rlp_tx.r,
-                    s=rlp_tx.s,
-                    from_addr=rlp_tx.sender,
-                    tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
-                )
-
-            else:
-                # Legacy transaction
-                tx = Transaction(
-                    nonce=rlp_tx.nonce,
-                    gas_price=rlp_tx.gas_price,
-                    gas_limit=rlp_tx.gas_limit,
-                    to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
-                    value=rlp_tx.value,
-                    data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
-                    chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
-                    v=rlp_tx.v,
-                    r=rlp_tx.r,
-                    s=rlp_tx.s,
-                    from_addr=rlp_tx.sender,
-                    tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
-                )
-
-            # 3) Add to mempool
-            tx_hash = blockchain.add_transaction(tx)
-
-            if tx_hash:
-                # Broadcast to network
-                p2p_network.broadcast_transaction(tx)
-                print(f"✅ MetaMask transaction accepted: {tx_hash}")
-                result = tx_hash
-            else:
+         elif method == 'eth_sendRawTransaction':
+            raw_tx_hex = params[0] if params else None
+            if not raw_tx_hex:
                 return jsonify({
                     'jsonrpc': '2.0',
                     'id': rpc_id,
-                    'error': {'code': -32603, 'message': 'Transaction validation failed'}
+                    'error': {'code': -32602, 'message': 'missing raw transaction'}
                 })
-
-        except Exception as e:
-            print(f"❌ Raw transaction error: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({
-                'jsonrpc': '2.0',
-                'id': rpc_id,
-                'error': {'code': -32603, 'message': str(e)}  # Fixed: removed extra quote
-            })
-
-    else:
-        # Fallback mode
-        result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
+        
+            if RLP_AVAILABLE:
+                try:
+                    # 1) Decode the raw transaction
+                    rlp_tx = decode_raw_transaction(raw_tx_hex)
+        
+                    # 2) Convert RLP tx → VelvetChain internal tx object
+                    if isinstance(rlp_tx, EIP1559Transaction):
+                        effective_gas_price = rlp_tx.max_fee_per_gas
+        
+                        tx = Transaction(
+                            nonce=rlp_tx.nonce,
+                            gas_price=effective_gas_price,
+                            gas_limit=rlp_tx.gas_limit,
+                            to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
+                            value=rlp_tx.value,
+                            data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
+                            chain_id=rlp_tx.chain_id,
+                            v=rlp_tx.v,
+                            r=rlp_tx.r,
+                            s=rlp_tx.s,
+                            from_addr=rlp_tx.sender,
+                            tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
+                        )
+        
+                    else:
+                        # Legacy transaction
+                        tx = Transaction(
+                            nonce=rlp_tx.nonce,
+                            gas_price=rlp_tx.gas_price,
+                            gas_limit=rlp_tx.gas_limit,
+                            to=('0x' + rlp_tx.to.hex()) if rlp_tx.to else None,
+                            value=rlp_tx.value,
+                            data=('0x' + rlp_tx.data.hex()) if rlp_tx.data else '0x',
+                            chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
+                            v=rlp_tx.v,
+                            r=rlp_tx.r,
+                            s=rlp_tx.s,
+                            from_addr=rlp_tx.sender,
+                            tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
+                        )
+        
+                    # 3) Add to mempool
+                    tx_hash = blockchain.add_transaction(tx)
+        
+                    if tx_hash:
+                        # Broadcast to network
+                        p2p_network.broadcast_transaction(tx)
+                        print(f"✅ MetaMask transaction accepted: {tx_hash}")
+                        result = tx_hash
+                    else:
+                        return jsonify({
+                            'jsonrpc': '2.0',
+                            'id': rpc_id,
+                            'error': {'code': -32603, 'message': 'Transaction validation failed'}
+                        })
+        
+                except Exception as e:
+                    print(f"❌ Raw transaction error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return jsonify({
+                        'jsonrpc': '2.0',
+                        'id': rpc_id,
+                        'error': {'code': -32603, 'message': str(e)}  # Fixed: removed extra quote
+                    })
+        
+            else:
+                # Fallback mode
+                result = "0x" + hashlib.sha256(raw_tx_hex.encode()).hexdigest()
 
 
 @app.route('/api/stats', methods=['GET'])
