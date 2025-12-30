@@ -186,77 +186,60 @@ if RLP_AVAILABLE:
     
 def decode_raw_transaction(raw_tx_hex):
     """
-    Supports:
-    - Legacy RLP transactions
-    - EIP-1559 typed transactions (0x02)
+    Decode raw Ethereum transaction (legacy + EIP-1559 typed tx)
+    Returns RLPTransaction + normalized numeric v,r,s
     """
 
-    # Strip 0x prefix
     if raw_tx_hex.startswith("0x"):
         raw_tx_hex = raw_tx_hex[2:]
 
     raw_bytes = bytes.fromhex(raw_tx_hex)
 
-    #
-    # Detect typed transaction prefix
-    #
-    if raw_bytes[0] == 0x02:
-        print("🔹 EIP-1559 typed transaction detected")
+    # Typed transaction prefix (EIP-2718)
+    tx_type = None
+    if raw_bytes[0] in (1, 2):   # 0x01 = access list, 0x02 = EIP-1559
+        tx_type = raw_bytes[0]
+        raw_bytes = raw_bytes[1:]
 
-        body = raw_bytes[1:]
-        fields = rlp.decode(body)
-
-        (
-            chain_id,
-            nonce,
-            max_priority_fee_per_gas,
-            max_fee_per_gas,
-            gas_limit,
-            to,
-            value,
-            data,
-            access_list,
-            v,
-            r,
-            s
-        ) = fields
-
-        # Recover sender
-        msg_hash = keccak(body)
-        sig = keys.Signature(vrs=(v - 27, r, s))
-        pub = sig.recover_public_key_from_msg_hash(msg_hash)
-        sender = to_checksum_address(keccak(pub.to_bytes())[-20:])
-
-        #
-        # Build pseudo-RLPTransaction so the rest
-        # of your pipeline still works unchanged
-        #
-        class WrappedTx:
-            pass
-
-        tx = WrappedTx()
-        tx.nonce = int(nonce)
-        tx.gas_price = int(max_fee_per_gas)  # simplified model
-        tx.gas_limit = int(gas_limit)
-        tx.to = to
-        tx.value = int(value)
-        tx.data = data
-        tx.v = int(v)
-        tx.r = int(r)
-        tx.s = int(s)
-        tx.sender = sender
-
-        return tx
-
-    #
-    # Legacy transaction decode
-    #
     tx = rlp.decode(raw_bytes, RLPTransaction)
 
-    # Ensure sender field exists
-    _ = tx.sender
+    v = tx.v
+    r = tx.r
+    s = tx.s
+
+    # --- MetaMask typed tx fields come as bytes, convert to ints ---
+    if isinstance(v, (bytes, bytearray)):
+        v = int.from_bytes(v, "big")
+
+    if isinstance(r, (bytes, bytearray)):
+        r = int.from_bytes(r, "big")
+
+    if isinstance(s, (bytes, bytearray)):
+        s = int.from_bytes(s, "big")
+
+    # Normalize chain_id rules
+    if v >= 35:
+        chain_id = (v - 35) // 2
+    else:
+        chain_id = CHAIN_ID
+
+    # Re-create signature object safely
+    sig = keys.Signature(vrs=(v - 27 if v >= 27 else v, r, s))
+    msg_hash = keccak(rlp.encode(tx))
+
+    sender = sig.recover_public_key_from_msg_hash(msg_hash).to_checksum_address()
+
+    tx._sender = sender
+
+    print("🔹 Decoded transaction")
+    print("   Type:", "EIP-1559" if tx_type == 2 else "Legacy")
+    print("   From:", sender)
+    print("   Nonce:", tx.nonce)
+    print("   Value:", tx.value)
+    print("   Gas:", tx.gas_limit, "@", tx.gas_price)
 
     return tx
+
 
 
     
