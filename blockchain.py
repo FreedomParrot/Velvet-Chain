@@ -489,9 +489,12 @@ class Transaction:
         self.hash = self._calculate_hash()
     
     def verify(self):
-        """Verify transaction signature"""
-        if not self.from_addr:
-            return False
+    """Verify transaction signature"""
+    # If from_addr is set and we have signature components, trust it
+    # (signature was already verified during RLP decode)
+    if self.from_addr and self.v > 0 and self.r > 0 and self.s > 0:
+        return True
+    return False
         
         # If this transaction came from MetaMask (has valid v, r, s values),
         # trust the signature recovery that already happened during RLP decode
@@ -752,34 +755,50 @@ class VelvetChain:
         with self.chain_lock:
             return self.chain[-1] if self.chain else None
     
-    def add_transaction(self, tx):
-        """Add transaction to mempool"""
-        # Verify signature
-        if not tx.verify():
-            print(f"❌ Invalid signature for tx {tx.hash[:16]}...")
-            return None
-        
-        # Check nonce
-        sender = tx.from_addr.lower()
-        expected_nonce = self.nonces.get(sender, 0)
-        if tx.nonce != expected_nonce:
-            print(f"❌ Invalid nonce: got {tx.nonce}, expected {expected_nonce}")
-            return None
-        
-        # Check balance (value + max gas cost)
-        max_cost = tx.value + (tx.gas_limit * tx.gas_price)
-        if self.balances.get(sender, 0) < max_cost:
-            print(f"❌ Insufficient balance: need {max_cost / 10**18}, have {self.balances.get(sender, 0) / 10**18}")
-            return None
-        
-        # Check gas price
-        if tx.gas_price < MIN_GAS_PRICE:
-            print(f"❌ Gas price too low: {tx.gas_price} < {MIN_GAS_PRICE}")
-            return None
-        
-        self.pending_transactions.append(tx)
-        print(f"✅ Transaction added to mempool: {tx.hash[:16]}...")
-        return tx.hash
+def add_transaction(self, tx):
+    """Add transaction to mempool"""
+    print(f"🔍 DEBUG: Attempting to add transaction")
+    print(f"   From: {tx.from_addr}")
+    print(f"   To: {tx.to}")
+    print(f"   Value: {tx.value}")
+    print(f"   Nonce: {tx.nonce}")
+    print(f"   v={tx.v}, r={tx.r}, s={tx.s}")
+    
+    # Verify signature
+    verify_result = tx.verify()
+    print(f"   Signature verification: {verify_result}")
+    
+    if not verify_result:
+        print(f"❌ Invalid signature for tx {tx.hash[:16]}...")
+        return None
+    
+    # Check nonce
+    sender = tx.from_addr.lower()
+    expected_nonce = self.nonces.get(sender, 0)
+    print(f"   Expected nonce: {expected_nonce}, Got: {tx.nonce}")
+    
+    if tx.nonce != expected_nonce:
+        print(f"❌ Invalid nonce: got {tx.nonce}, expected {expected_nonce}")
+        return None
+    
+    # Check balance (value + max gas cost)
+    max_cost = tx.value + (tx.gas_limit * tx.gas_price)
+    current_balance = self.balances.get(sender, 0)
+    print(f"   Balance: {current_balance / 10**18} VELVET")
+    print(f"   Max cost: {max_cost / 10**18} VELVET")
+    
+    if current_balance < max_cost:
+        print(f"❌ Insufficient balance: need {max_cost / 10**18}, have {current_balance / 10**18}")
+        return None
+    
+    # Check gas price
+    if tx.gas_price < MIN_GAS_PRICE:
+        print(f"❌ Gas price too low: {tx.gas_price} < {MIN_GAS_PRICE}")
+        return None
+    
+    self.pending_transactions.append(tx)
+    print(f"✅ Transaction added to mempool: {tx.hash[:16]}...")
+    return tx.hash
     
     def get_block_reward(self, block_number):
         """Calculate block reward with halving"""
