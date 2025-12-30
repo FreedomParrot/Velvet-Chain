@@ -11,6 +11,7 @@ NEW FEATURES:
 - Event logs and receipts
 - Account nonces and replay protection
 - Transaction fees to miners
+- FIXED: Proper transaction status tracking for MetaMask
 """
 
 import argparse
@@ -51,7 +52,7 @@ except ImportError:
 # ==================== CONFIGURATION ====================
 
 CHAIN_ID = 16523431
-VERSION = "2.0.0-enhanced"
+VERSION = "2.0.1-fixed"
 
 GENESIS_ADDRESS = "0xd7e0aa3f99cc4addfd6797897df438a146a9e328"
 INITIAL_SUPPLY = 1000000 * 10**18
@@ -518,7 +519,8 @@ class TransactionReceipt:
     """Transaction execution receipt"""
     
     def __init__(self, tx_hash, block_number, block_hash, from_addr, to, 
-                 gas_used, cumulative_gas_used, status, logs=None, contract_address=None):
+                 gas_used, cumulative_gas_used, status, logs=None, contract_address=None,
+                 transaction_index=0):
         self.tx_hash = tx_hash
         self.block_number = block_number
         self.block_hash = block_hash
@@ -529,10 +531,12 @@ class TransactionReceipt:
         self.status = status  # 1 = success, 0 = failed
         self.logs = logs or []
         self.contract_address = contract_address
+        self.transaction_index = transaction_index
     
     def to_dict(self):
         return {
             'transactionHash': self.tx_hash,
+            'transactionIndex': hex(self.transaction_index),
             'blockNumber': hex(self.block_number),
             'blockHash': self.block_hash,
             'from': self.from_addr,
@@ -541,7 +545,8 @@ class TransactionReceipt:
             'cumulativeGasUsed': hex(self.cumulative_gas_used),
             'status': hex(self.status),
             'logs': self.logs,
-            'contractAddress': self.contract_address
+            'contractAddress': self.contract_address,
+            'logsBloom': '0x' + '0' * 512
         }
 
 # ==================== SMART CONTRACTS ====================
@@ -710,8 +715,10 @@ class VelvetChain:
         # Check nonce
         sender = tx.from_addr.lower()
         expected_nonce = self.nonces.get(sender, 0)
-        if tx.nonce != expected_nonce:
-            print(f"❌ Invalid nonce: got {tx.nonce}, expected {expected_nonce}")
+        
+        # FIXED: Allow nonce to be current OR higher (for queued transactions)
+        if tx.nonce < expected_nonce:
+            print(f"❌ Nonce too low: got {tx.nonce}, expected >= {expected_nonce}")
             return None
         
         # Check balance (value + max gas cost)
@@ -725,8 +732,14 @@ class VelvetChain:
             print(f"❌ Gas price too low: {tx.gas_price} < {MIN_GAS_PRICE}")
             return None
         
+        # Check if transaction with same hash already exists
+        for pending_tx in self.pending_transactions:
+            if pending_tx.hash == tx.hash:
+                print(f"⚠️  Duplicate transaction rejected: {tx.hash[:16]}...")
+                return None
+        
         self.pending_transactions.append(tx)
-        print(f"✅ Transaction added to mempool: {tx.hash[:16]}...")
+        print(f"✅ Transaction added to mempool: {tx.hash[:16]}... (nonce: {tx.nonce})")
         return tx.hash
     
     def get_block_reward(self, block_number):
@@ -746,20 +759,29 @@ class VelvetChain:
             
             block_reward = self.get_block_reward(mining_block_num)
             
-            # Select transactions for block (highest gas price first)
+            # Select transactions for block (by nonce order per sender)
             sorted_txs = sorted(self.pending_transactions, 
-                              key=lambda tx: tx.gas_price, reverse=True)
+                              key=lambda tx: (tx.from_addr, tx.nonce))
             
             block_txs = []
             total_gas = 0
             total_fees = 0
+            processed_senders = {}
             
             for tx in sorted_txs:
+                sender = tx.from_addr.lower()
+                expected_nonce = processed_senders.get(sender, self.nonces.get(sender, 0))
+                
+                # Only include if nonce matches expected
+                if tx.nonce != expected_nonce:
+                    continue
+                
                 gas_needed = tx.calculate_gas_used()
                 if total_gas + gas_needed <= GAS_LIMIT_PER_BLOCK:
                     block_txs.append(tx)
                     total_gas += gas_needed
                     total_fees += gas_needed * tx.gas_price
+                    processed_senders[sender] = tx.nonce + 1
                 
                 if len(block_txs) >= 100:  # Max txs per block
                     break
@@ -809,7 +831,7 @@ class VelvetChain:
                     self.balances[addr] = self.balances.get(addr, 0) + tx.value
                 else:
                     # Execute transaction
-                    success, receipt = self._execute_transaction(tx, new_block, cumulative_gas)
+                    success, receipt = self._execute_transaction(tx, new_block, cumulative_gas, i)
                     cumulative_gas = receipt.cumulative_gas_used
                     new_block.receipts.append(receipt)
                     self.receipts[tx.hash] = receipt
@@ -830,7 +852,7 @@ class VelvetChain:
         
         return new_block
     
-    def _execute_transaction(self, tx, block, cumulative_gas):
+    def _execute_transaction(self, tx, block, cumulative_gas, tx_index):
         """Execute a transaction and return receipt"""
         sender = tx.from_addr.lower()
         recipient = tx.to.lower() if tx.to else None
@@ -852,6 +874,7 @@ class VelvetChain:
                 contract = SmartContract(contract_address, tx.data, sender)
                 contract.balance = tx.value
                 self.contracts[contract_address.lower()] = contract
+                self.balances[sender] -= tx.value
                 print(f"   📜 Contract deployed at {contract_address}")
             
             elif tx.tx_type == TX_TYPE_CONTRACT_CALL and recipient in self.contracts:
@@ -885,7 +908,8 @@ class VelvetChain:
             cumulative_gas_used=cumulative_gas + gas_used,
             status=status,
             logs=logs,
-            contract_address=contract_address
+            contract_address=contract_address,
+            transaction_index=tx_index
         )
         
         return status == 1, receipt
@@ -941,6 +965,21 @@ class VelvetChain:
     def get_transaction_receipt(self, tx_hash):
         return self.receipts.get(tx_hash)
     
+    def get_transaction_by_hash(self, tx_hash):
+        """Find transaction by hash in chain or mempool"""
+        # Check pending first
+        for tx in self.pending_transactions:
+            if tx.hash == tx_hash:
+                return tx, None
+        
+        # Check confirmed
+        with self.chain_lock:
+            for block in self.chain:
+                for tx in block.transactions:
+                    if tx.hash == tx_hash:
+                        return tx, block
+        return None, None
+    
     def replace_chain(self, new_chain_data):
         try:
             new_blocks = [Block.from_dict(b) for b in new_chain_data]
@@ -979,7 +1018,7 @@ class VelvetChain:
                 
                 # Replay all transactions
                 for block in self.chain[1:]:
-                    for tx in block.transactions:
+                    for i, tx in enumerate(block.transactions):
                         sender = tx.from_addr.lower() if tx.from_addr else None
                         recipient = tx.to.lower() if tx.to else None
                         
@@ -1031,7 +1070,7 @@ class VelvetChain:
                             addr = new_block.miner.lower()
                             self.balances[addr] = self.balances.get(addr, 0) + tx.value
                         else:
-                            success, receipt = self._execute_transaction(tx, new_block, cumulative_gas)
+                            success, receipt = self._execute_transaction(tx, new_block, cumulative_gas, i)
                             cumulative_gas = receipt.cumulative_gas_used
                             self.receipts[tx.hash] = receipt
                     
@@ -1073,13 +1112,6 @@ class VelvetChain:
             if number < len(self.chain):
                 return self.chain[number]
         return None
-    
-    def get_transaction_by_hash(self, tx_hash):
-        with self.chain_lock:
-            for block in self.chain:
-                for tx in block.transactions:
-                    if tx.hash == tx_hash:
-                        return tx, block
 
 # ==================== P2P NETWORKING ====================
 
@@ -1316,11 +1348,23 @@ def json_rpc():
             if not tx_hash:
                 raise ValueError("Transaction hash required")
             
+            # Check pending transactions first
+            for pending_tx in blockchain.pending_transactions:
+                if pending_tx.hash == tx_hash:
+                    tx_dict = pending_tx.to_dict()
+                    tx_dict['blockNumber'] = None
+                    tx_dict['blockHash'] = None
+                    tx_dict['transactionIndex'] = None
+                    result = tx_dict
+                    return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 'result': result})
+            
+            # Check confirmed transactions
             tx, block = blockchain.get_transaction_by_hash(tx_hash)
             if tx and block:
                 tx_dict = tx.to_dict()
                 tx_dict['blockNumber'] = hex(block.number)
                 tx_dict['blockHash'] = block.hash
+                tx_dict['transactionIndex'] = hex(block.transactions.index(tx))
                 result = tx_dict
             else:
                 result = None
@@ -1330,6 +1374,13 @@ def json_rpc():
             if not tx_hash:
                 raise ValueError("Transaction hash required")
             
+            # Check if transaction is still pending
+            for pending_tx in blockchain.pending_transactions:
+                if pending_tx.hash == tx_hash:
+                    result = None  # Pending = no receipt yet
+                    return jsonify({'jsonrpc': '2.0', 'id': rpc_id, 'result': result})
+            
+            # Get confirmed receipt
             receipt = blockchain.get_transaction_receipt(tx_hash)
             result = receipt.to_dict() if receipt else None
         
@@ -1589,13 +1640,14 @@ def health():
 def print_banner():
     print("""
     ╔══════════════════════════════════════════════════════════╗
-    ║          🔗 VELVET CHAIN v2.0.0-ENHANCED 🔗            ║
+    ║          🔗 VELVET CHAIN v2.0.1-FIXED 🔗               ║
     ║       Full EVM-Compatible Blockchain with Txs            ║
     ║                                                          ║
     ║  ✨ Real transactions with signing                       ║
     ║  ⛽ Gas fees and transaction fees                       ║
     ║  📜 Smart contract support                              ║
     ║  💎 Transaction receipts & logs                         ║
+    ║  ✅ FIXED: MetaMask nonce handling                      ║
     ╚══════════════════════════════════════════════════════════╝
     """)
 
