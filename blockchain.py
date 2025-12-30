@@ -489,82 +489,82 @@ class Transaction:
         self.hash = self._calculate_hash()
     
    def verify(self):
-    """Verify transaction signature"""
-    if not self.from_addr:
-        return False
-    
-    # If this transaction came from MetaMask (has valid v, r, s values),
-    # trust the signature recovery that already happened during RLP decode
-    if self.v > 0 and self.r > 0 and self.s > 0:
-        # Signature was already verified during decode_raw_transaction()
-        # The from_addr was recovered using proper ECDSA
-        return True
-    
-    # For internally created transactions, use simplified verification
-    signing_dict = {
-        'nonce': self.nonce,
-        'gasPrice': self.gas_price,
-        'gas': self.gas_limit,
-        'to': self.to if self.to else None,
-        'value': self.value,
-        'data': self.data,
-        'chainId': self.chain_id
-    }
-    return Wallet.verify_signature(signing_dict, self.v, self.r, self.s, self.from_addr)
-    
-    def calculate_gas_used(self):
-        """Calculate actual gas used by transaction"""
-        gas_used = BASE_TX_GAS
+        """Verify transaction signature"""
+        if not self.from_addr:
+            return False
         
-        if self.tx_type == TX_TYPE_CONTRACT_CREATION:
-            gas_used += CONTRACT_CREATION_GAS
-            # Add gas for bytecode size
-            if self.data and self.data != '0x':
-                bytecode_size = (len(self.data) - 2) // 2  # Remove 0x and count bytes
-                gas_used += bytecode_size * 200
+        # If this transaction came from MetaMask (has valid v, r, s values),
+        # trust the signature recovery that already happened during RLP decode
+        if self.v > 0 and self.r > 0 and self.s > 0:
+            # Signature was already verified during decode_raw_transaction()
+            # The from_addr was recovered using proper ECDSA
+            return True
         
-        elif self.tx_type == TX_TYPE_CONTRACT_CALL:
-            gas_used += CONTRACT_CALL_GAS
-            # Add gas for calldata
-            if self.data and self.data != '0x':
-                calldata_size = (len(self.data) - 2) // 2
-                gas_used += calldata_size * 16
-        
-        return min(gas_used, self.gas_limit)
-    
-    def to_dict(self):
-        return {
-            'hash': self.hash,
-            'nonce': hex(self.nonce),
-            'gasPrice': hex(self.gas_price),
-            'gas': hex(self.gas_limit),
+        # For internally created transactions, use simplified verification
+        signing_dict = {
+            'nonce': self.nonce,
+            'gasPrice': self.gas_price,
+            'gas': self.gas_limit,
             'to': self.to if self.to else None,
-            'from': self.from_addr or '0x0',
-            'value': hex(self.value),
+            'value': self.value,
             'data': self.data,
-            'chainId': hex(self.chain_id),
-            'v': hex(self.v),
-            'r': hex(self.r),
-            's': hex(self.s),
-            'type': hex(self.tx_type)
+            'chainId': self.chain_id
         }
-    
-    @staticmethod
-    def from_dict(data):
-        return Transaction(
-            nonce=int(data['nonce'], 16),
-            gas_price=int(data['gasPrice'], 16),
-            gas_limit=int(data['gas'], 16),
-            to=data['to'],
-            value=int(data['value'], 16),
-            data=data['data'],
-            chain_id=int(data.get('chainId', hex(CHAIN_ID)), 16),
-            v=int(data['v'], 16),
-            r=int(data['r'], 16),
-            s=int(data['s'], 16),
-            from_addr=data.get('from', '0x0'),
-            tx_type=int(data.get('type', '0x0'), 16)
-        )
+        return Wallet.verify_signature(signing_dict, self.v, self.r, self.s, self.from_addr)
+        
+        def calculate_gas_used(self):
+            """Calculate actual gas used by transaction"""
+            gas_used = BASE_TX_GAS
+            
+            if self.tx_type == TX_TYPE_CONTRACT_CREATION:
+                gas_used += CONTRACT_CREATION_GAS
+                # Add gas for bytecode size
+                if self.data and self.data != '0x':
+                    bytecode_size = (len(self.data) - 2) // 2  # Remove 0x and count bytes
+                    gas_used += bytecode_size * 200
+            
+            elif self.tx_type == TX_TYPE_CONTRACT_CALL:
+                gas_used += CONTRACT_CALL_GAS
+                # Add gas for calldata
+                if self.data and self.data != '0x':
+                    calldata_size = (len(self.data) - 2) // 2
+                    gas_used += calldata_size * 16
+            
+            return min(gas_used, self.gas_limit)
+        
+        def to_dict(self):
+            return {
+                'hash': self.hash,
+                'nonce': hex(self.nonce),
+                'gasPrice': hex(self.gas_price),
+                'gas': hex(self.gas_limit),
+                'to': self.to if self.to else None,
+                'from': self.from_addr or '0x0',
+                'value': hex(self.value),
+                'data': self.data,
+                'chainId': hex(self.chain_id),
+                'v': hex(self.v),
+                'r': hex(self.r),
+                's': hex(self.s),
+                'type': hex(self.tx_type)
+            }
+        
+        @staticmethod
+        def from_dict(data):
+            return Transaction(
+                nonce=int(data['nonce'], 16),
+                gas_price=int(data['gasPrice'], 16),
+                gas_limit=int(data['gas'], 16),
+                to=data['to'],
+                value=int(data['value'], 16),
+                data=data['data'],
+                chain_id=int(data.get('chainId', hex(CHAIN_ID)), 16),
+                v=int(data['v'], 16),
+                r=int(data['r'], 16),
+                s=int(data['s'], 16),
+                from_addr=data.get('from', '0x0'),
+                tx_type=int(data.get('type', '0x0'), 16)
+            )
 
 class TransactionReceipt:
     """Transaction execution receipt"""
