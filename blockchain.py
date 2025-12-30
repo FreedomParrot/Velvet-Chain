@@ -1391,20 +1391,42 @@ def json_rpc():
                     rlp_tx = decode_raw_transaction(raw_tx_hex)
                     
                     # Convert to VelvetChain transaction
-                    tx = Transaction(
-                        nonce=rlp_tx.nonce,
-                        gas_price=rlp_tx.gas_price,
-                        gas_limit=rlp_tx.gas_limit,
-                        to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
-                        value=rlp_tx.value,
-                        data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
-                        chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
-                        v=rlp_tx.v,
-                        r=rlp_tx.r,
-                        s=rlp_tx.s,
-                        from_addr=rlp_tx.sender,
-                        tx_type=TX_TYPE_CONTRACT_CREATION if not rlp_tx.to else TX_TYPE_TRANSFER
-                    )
+if isinstance(rlp_tx, EIP1559Transaction):
+    # Use max_fee_per_gas as effective gas price
+    effective_gas_price = rlp_tx.max_fee_per_gas
+
+    tx = Transaction(
+        nonce=rlp_tx.nonce,
+        gas_price=effective_gas_price,
+        gas_limit=rlp_tx.gas_limit,
+        to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
+        value=rlp_tx.value,
+        data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
+        chain_id=rlp_tx.chain_id,
+        v=rlp_tx.v,
+        r=rlp_tx.r,
+        s=rlp_tx.s,
+        from_addr=rlp_tx.sender,
+        tx_type=TX_TYPE_TRANSFER if rlp_tx.to else TX_TYPE_CONTRACT_CREATION
+    )
+
+else:
+    # Legacy transaction
+    tx = Transaction(
+        nonce=rlp_tx.nonce,
+        gas_price=rlp_tx.gas_price,
+        gas_limit=rlp_tx.gas_limit,
+        to='0x' + rlp_tx.to.hex() if rlp_tx.to else None,
+        value=rlp_tx.value,
+        data='0x' + rlp_tx.data.hex() if rlp_tx.data else '0x',
+        chain_id=(rlp_tx.v - 35) // 2 if rlp_tx.v >= 35 else CHAIN_ID,
+        v=rlp_tx.v,
+        r=rlp_tx.r,
+        s=rlp_tx.s,
+        from_addr=rlp_tx.sender,
+        tx_type=TX_TYPE_TRANSFER if rlp_tx.to else TX_TYPE_CONTRACT_CREATION
+    )
+
                     
                     # Add to blockchain mempool
                     tx_hash = blockchain.add_transaction(tx)
